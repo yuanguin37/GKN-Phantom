@@ -2,13 +2,15 @@
 
 > **Production-grade automated penetration testing skill for the OpenClaw AI Agent Framework.**
 
-[![Version](https://img.shields.io/badge/version-5.0.0-blue)](https://github.com/your-org/gkn-phantom/releases)
+[![Version](https://img.shields.io/badge/version-5.4.0-blue)](https://github.com/your-org/gkn-phantom/releases)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-Skill-orange)](https://openclaw.ai)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![Modules](https://img.shields.io/badge/modules-28-brightgreen)]()
+[![Modules](https://img.shields.io/badge/modules-34-brightgreen)]()
 
-GKN-Phantom 是一个面向 OpenClaw AI Agent 框架的工业级自动化渗透测试技能包。v5.0.0 配备 **28 个检测模块**，覆盖 **38 种漏洞类型**，支持 **25+ 种 WAF 识别**与绕过策略，**20+ 条攻击链模式**，在严格的 **Scope Guard · Risk Gate · Rate Limiter** 三重安全模型下，执行全生命周期安全验证：从零触碰被动侦察、主动资产发现、分层漏洞检测、交互式浏览器认证、证据验证、攻击路径分析到专业可视化报告生成。
+GKN-Phantom 是一个面向 OpenClaw AI Agent 框架的工业级自动化渗透测试技能包。v5.4 配备 **34 个检测模块**，覆盖 **38 种漏洞类型**，支持 **25+ 种 WAF 识别**与绕过策略，**20+ 条攻击链模式**，在严格的 **Scope Guard · Risk Gate · Rate Limiter** 三重安全模型下，执行全生命周期安全验证：从零触碰被动侦察、主动资产发现、分层漏洞检测、交互式浏览器认证、证据验证、攻击路径分析到专业可视化报告生成。
+
+**Quick Combat 一键管线**（v5.1 引入，v5.4 大幅强化）：`quick_combat.py` 单命令完成 检测 → 深挖 → PoC → 利用脚本 的实战闭环——nuclei 快扫 + 内置探针 + **国内组件/OA 未授权指纹库**（泛微/致远/通达/用友/禅道/JeecgBoot/若依等 32 条探针，含 queryFieldBySql 一键 SQL 验证）+ **katana 全站爬取喂参数注入探测** + **JS 深挖链**（密钥泄露 → 隐藏端点 → 主动探测）+ **真实 OOB 带外信道**（interactsh/ceye/dnslog，盲 SSRF 回调确认即 validated）+ **跨运行去重记忆**（`[已提交]/[重复]` 标注防 SRC 重复提交扣分）。
 
 ---
 
@@ -31,6 +33,12 @@ GKN-Phantom 是一个面向 OpenClaw AI Agent 框架的工业级自动化渗透�
 | 🔗 **20+攻击链分析** | SSRF→云元数据 · SQLi→凭证窃取 · SSTI→RCE · 原型污染→提权 · HTTP走私→投毒 |
 | 📊 **可视化报告** (v5) | HTML仪表盘（SVG风险仪表+发现卡片+攻击路径图+资产表+修复矩阵+暗色模式） · PDF导出 |
 | ⚙️ **规则配置化** (v5) | YAML/JSON规则定义 · 热加载 · 社区可扩展 · 无需修改Python代码即可添加检测规则 |
+| ⚔️ **Quick Combat 一键管线** (v5.1-v5.3) | 单命令 detect → deep-dive → PoC → exploit · 影响升级层（响应内容重定级）· 深挖适配器（Actuator/GraphQL/Swagger）· 参数发现+有界SQLi/SSTI探测 |
+| 🇨🇳 **国内组件/OA 探针库** (v5.4) | 32 条探针：泛微 e-cology（BeanShell/Ssologin//services/）· 致远 · 通达 · 用友 · 禅道 · JeecgBoot（jmreport queryFieldBySql 一键 SQL 验证）· 若依（druid 变体）· 帆软/亿邮/金蝶/蓝凌/红帆/万户 · POST 验证器 + 软 404 黑名单防误报 |
+| 🕸️ **katana 全站爬取** (v5.4) | 有 katana 时全站爬取（深度 3），所有带参 URL 喂参数注入探测——SQLi/SSTi 覆盖从"首页参数"扩展到"全站面"；无 katana 自动回退单页 |
+| 🔍 **JS 深挖链** (v5.4) | JS bundle 分析（密钥/危险Sink/调试端点）+ 隐藏端点提取（`extract_endpoint_entries`）回喂注入探测——JS 侦察链入主动探测 |
+| 📡 **真实 OOB 带外信道** (v5.4) | interactsh 自托管/ceye.io/dnslog.cn 三通道 · 替换静态占位符 · 盲 SSRF 回调确认即产出 **validated** 级 finding（直接进 PoC/利用生成） |
+| 🧠 **跨运行去重记忆** (v5.4) | finding 指纹持久化到 `combat_memory.json` · 重扫自动标注 `[已提交]/[重复]` · 防 SRC 平台重复提交扣分降信誉 |
 | 🔄 **状态恢复系统** | checkpoint重试 · 部分状态恢复 · 失败回滚到安全前态 |
 | 📊 **SARIF 2.1.0 输出** | CI/CD兼容，partialFingerprints基线去重 |
 | 🔌 **工具自动检测** | nuclei · subfinder · httpx · ffuf · amass · katana · naabu 自动检测，缺失时回退纯Python实现 |
@@ -54,7 +62,7 @@ GKN-Phantom 是一个面向 OpenClaw AI Agent 框架的工业级自动化渗透�
 
 ```
                         ┌─────────────────────────────────────┐
-                        │        GKN-Phantom v5.0 Pipeline      │
+                        │        GKN-Phantom v5.4 Pipeline      │
                         ├──────────┬──────────┬────────────────┤
                         │  INIT    │  SCOPE   │  PRE_FLIGHT    │
                         │          │  CHECK   │  (dry-run)     │
@@ -99,9 +107,9 @@ GKN-Phantom 是一个面向 OpenClaw AI Agent 框架的工业级自动化渗透�
 
 ```
 GKN-Phantom/
-├── SKILL.md                         # 技能主契约（完整规范，v5.0）
+├── SKILL.md                         # 技能主契约（完整规范，v5.4）
 ├── README.md                        # 本文件
-├── scripts/                         # 可执行脚本（28 个）
+├── scripts/                         # 可执行脚本（34 个）
 │   ├── utils.py                     # 共享工具：JSON I/O、DNS解析、指纹、去重
 │   ├── state.py                     # 状态序列化器：原子checkpoint、断点恢复
 │   ├── state_recovery.py            # 状态恢复：checkpoint重试/部分恢复/失败回滚
@@ -136,7 +144,15 @@ GKN-Phantom/
 │   │   # ── v5 新增模块 ──
 │   ├── report_visualizer.py         # 可视化报告：HTML仪表盘/SVG图表/暗色模式/PDF导出
 │   ├── browser_agent.py             # 浏览器代理：Playwright/多步骤认证/验证码/MFA/2FA
-│   └── poc_generator.py             # PoC生成器：curl/Python/HAR/Markdown/安全分类
+│   ├── poc_generator.py             # PoC生成器：curl/Python/HAR/Markdown/安全分类
+│   │
+│   │   # ── v5.1-v5.3 Quick Combat ──
+│   ├── quick_combat.py              # 一键实战管线：检测→深挖→PoC→利用→HTML报告+manifest
+│   ├── exploit_generator.py         # 利用脚本生成器：validated findings→自包含Python演示脚本
+│   │
+│   │   # ── v5.4 Combat 强化 ──
+│   ├── cn_probes.py                 # 国内组件/OA未授权探针库：泛微/致远/通达/用友/禅道/JeecgBoot/若依等32条
+│   └── oob_client.py                # 真实OOB带外信道：interactsh自托管/ceye.io/dnslog.cn，盲SSRF回调验证
 │
 ├── rules/                           # 规则配置目录 (v5)
 │   ├── low.yaml                     # LOW级别规则（10条）
@@ -146,11 +162,16 @@ GKN-Phantom/
 │   ├── waf_signatures.yaml          # 25+ WAF签名库
 │   └── mutation_strategies.yaml     # 变异策略配置
 │
-├── tests/                           # 测试套件 (v5)
+├── tests/                           # 测试套件 (v5, 200+ 用例)
 │   ├── conftest.py                  # pytest fixtures
 │   ├── test_vuln_detector.py        # 漏洞检测引擎测试
 │   ├── test_adaptive_engine.py      # 自适应引擎测试
-│   └── test_rules_loader.py         # 规则加载器测试
+│   ├── test_rules_loader.py         # 规则加载器测试
+│   ├── test_utils.py                # 共享工具测试
+│   ├── test_report_generator.py     # 报告生成器测试
+│   ├── test_quick_combat.py         # Quick Combat管线测试（深挖/注入/OOB/katana/JS/memory）
+│   ├── test_cn_probes.py            # 国内组件探针库测试（本地假OA目标）
+│   └── test_oob_client.py           # OOB信道客户端测试（假API+mock interactsh）
 │
 ├── references/                      # 参考文档（7 个）
 │   ├── safety_policy.md             # 安全模型完整规范
@@ -241,6 +262,29 @@ user: "Run a penetration test on dev-internal.test"
 ### 独立脚本测试
 
 ```bash
+# ── Quick Combat 一键实战管线（推荐入口）──
+# 全层开启：nuclei + 内置探针 + 国内组件探针 + katana爬取 + JS深挖 + 跨运行去重
+python scripts/quick_combat.py --targets targets.txt --output-dir ./combat_output/
+
+# 配置 OOB 带外信道（盲SSRF回调验证 → validated级finding）
+python scripts/quick_combat.py --targets targets.txt --oob-provider ceye \
+    --ceye-identifier <id> --ceye-token <token>
+
+# interactsh 自托管 / 本机安装
+python scripts/quick_combat.py --targets targets.txt --oob-provider interactsh \
+    --interactsh-server https://oast.your-domain.test
+
+# 精简模式：只要内置探针，关闭所有外部依赖
+python scripts/quick_combat.py --targets targets.txt --no-nuclei --no-crawl \
+    --no-js --no-memory
+
+# OOB 信道自检
+python scripts/oob_client.py --provider auto --tag selftest --wait 5
+
+# 国内组件探针单跑（泛微/通达/若依/JeecgBoot/致远/用友/禅道...）
+python scripts/cn_probes.py --targets https://oa.example.com
+
+# ── 单模块使用 ──
 # 被动侦察（零触碰）
 python scripts/passive_recon.py --domain example.com --mode all
 
@@ -370,6 +414,10 @@ GKN-Phantom 的安全模型是**不可协商的**。每个操作都经过三层�
 
 | 版本 | 日期 | 主要更新 |
 |------|------|----------|
+| **v5.4.0** | 2026-09 | 国内组件/OA 未授权探针库（32条：泛微/致远/通达/用友/禅道/JeecgBoot/若依/帆软/亿邮/金蝶/蓝凌/红帆/万户，含 POST 一键验证器）· 真实 OOB 带外信道（interactsh 自托管/ceye.io/dnslog.cn，盲 SSRF 回调验证 → validated）· katana 全站爬取喂参数注入探测 · JS 深挖链（js_analyzer + 隐藏端点提取回喂探测）· 跨运行去重记忆（combat_memory.json，`[已提交]/[重复]` 标注） |
+| **v5.3.0** | 2026-09 | Deep-Dive 深挖适配器（Actuator/GraphQL/Swagger：拉取实际暴露内容证明影响并升级严重级）· 参数发现 + 有界注入探测（报错型 SQLi 6 引擎签名 + SSTI 算术反射差分） |
+| **v5.2.0** | 2026-09 | 影响升级层：quick-probe findings 按响应内容重定级（活跃凭据/.git/heapdump/phpinfo/备份包 → high；PII 数据暴露评分 ≥3 → critical） |
+| **v5.1.0** | 2026-08 | Quick Combat Mode：单命令 detect → PoC → exploit 实战管线 · 利用脚本生成器 · 时间戳战斗报告 + HTML 索引 |
 | **v5.0.0** | 2026-08 | 交互式浏览器代理（Playwright）· 可视化HTML/PDF报告 · 规则配置化（YAML热加载） · 专业PoC生成器 · pytest测试框架 |
 | **v4.0.0** | 2026-08 | 被动侦察（crt.sh/DNS/WHOIS/Wayback/GitHub）· 目录爆破 · 专业SQL注入引擎 · SSL分析 · 技术指纹（200+签名） · Nuclei集成 · WAF绕过引擎 |
 | **v3.0.0** | 2026-07 | 38种漏洞类型（+16种高级）· 5个专项模块（JS/CVE/高级注入/API/云安全）· 20+攻击链 · 25+WAF识别 |
