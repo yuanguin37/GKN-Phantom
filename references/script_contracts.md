@@ -319,3 +319,105 @@ REPORT_GENERATION
 [persistent]
   └─ state.StateSerializer → checkpoint/resume
 ```
+
+---
+
+## Quick Combat Pipeline modules (v5.4)
+
+The one-command combat pipeline (`quick_combat.py`) and its helper modules.
+
+### quick_combat.py — `run_combat_pipeline(...)`
+
+```python
+run_combat_pipeline(
+    targets: list[str],                 # target URLs
+    tech_data: dict | None = None,      # tech_fingerprint output
+    output_dir: str = "./combat_output",
+    use_nuclei: bool = True,
+    quick_probes: bool = True,
+    severity_filter: list[str] | None = None,
+    rate_limit: int = 150,
+    concurrency: int = 25,
+    poc_formats: list[str] | None = None,
+    deep: bool = True,                  # enables all layered extensions
+    oob_client=None,                    # oob_client.OOBClient | None (C5)
+    use_cn_probes: bool = True,         # domestic OA/component probes
+    use_crawl: bool = True,             # katana full-site crawl (C3)
+    use_js: bool = True,                # JS bundle mining (C4)
+    use_memory: bool = True,            # cross-run dedup memory (C6)
+) -> dict
+```
+
+- **Output**: manifest dict (pipeline_version "5.4.0", by_severity,
+  duplicate_known, layers{cn_probes,katana_crawl,js_mining,oob_provider,
+  memory_dedup}, artifacts{findings,pocs,exploits,index,combat_memory}, summary)
+- **Error states**: every optional layer degrades to a no-op (missing katana /
+  OOB provider / JS files) and logs into `summary` — the pipeline never aborts
+- **Side effects**: writes `<output_dir>/<ts>/` artifacts and
+  `<output_dir>/combat_memory.json` (when use_memory=True)
+
+New pipeline phases (all gated by `deep=True`):
+
+| Phase | Layer | What it does |
+|-------|-------|--------------|
+| 2.55  | CN probes | `cn_probes.probe_cn_components(targets)` — domestic OA fingerprints + one-shot verifiers |
+| 2.6   | C3 crawl | `detect_katana()` → `crawl_katana()` → crawled parameterized URLs merge into `discover_params(extra_urls=...)` |
+| 2.6   | C4 JS | `collect_js_urls()` + `analyze_target_js()` → JS findings + hidden endpoints fed to `probe_injection()` |
+| 2.6   | C5 fire | `probe_blind_ssrf(target, entries, oob_client)` → OOB-tagged callbacks into `url`-style params |
+| 3     | C5 verify | `verify_oob_pending(all_findings, pending, oob_client)` → validated blind-SSRF findings |
+| 3.5   | C6 memory | `apply_memory_dedup()` marks known findings `[已提交]/[重复]`, then `merge_combat_memory()` persists |
+
+CLI switches (v5.4): `--oob-provider {auto,interactsh,ceye,dnslog,none}`,
+`--ceye-identifier`, `--ceye-token`, `--interactsh-server`,
+`--no-cn-probes`, `--no-crawl`, `--no-js`, `--no-memory`.
+
+### cn_probes.py — domestic OA/component unauthorized-access library
+
+- **`CN_PROBES`** — list of 32 probe dicts, same shape as
+  `quick_combat.QUICK_PROBES` plus optional `severity`, `method=POST` +
+  `post_body` + `post_content_type` (one-shot verifiers), and `not_patterns`
+  (soft-404 blacklist). Covers: 泛微 e-cology/e-office (BeanShell, Ssologin,
+  /services/), 致远 seeyon (getSessionList, htmlofficeservlet,
+  wpsAssistServlet), 通达 OA (/ispirit/, /module/), 用友 NC
+  (~ic servlets, uapws), 禅道 (getconfig), JeecgBoot (jmreport
+  queryFieldBySql one-shot SQLi verify, /sys/), 若依 RuoYi (druid
+  prod-api/dev-api variants, /system/), 帆软 FineReport, 亿邮, 金蝶,
+  蓝凌, 红帆, 万户.
+- **`probe_cn_components(targets: list[str]) -> list[dict]`** — runs every
+  probe via `quick_combat._run_quick_probe` (lazy import, no circular dep);
+  per-probe errors are swallowed. Returns standard finding dicts.
+- **CLI**: `--targets <csv|file|json>` → findings JSON on stdout, exit 2 on
+  no targets.
+- **Error states**: unreachable targets → `[]`, never raises.
+
+### oob_client.py — real OOB callback channel
+
+- **`get_oob_client(provider="auto", ceye_identifier=None, ceye_token=None,
+  interactsh_server=None, startup_timeout=15.0) -> OOBClient | None`**
+  - `provider="auto"` (default): interactsh binary in PATH → ceye env vars
+    (`GKN_CEYE_IDENTIFIER` + `GKN_CEYE_TOKEN`) → None
+  - explicit `interactsh` / `ceye` / `dnslog` skip auto-detection
+  - `none`/`off` → None; any provider failure → None (never raises)
+- **`OOBClient` interface**:
+  - `get_domain(tag="gkn") -> str | None` — unique tagged callback domain
+    (`{tag}.{correlation}.oast.fun` for interactsh; `{tag}.{id}.ceye.io`
+    for ceye; `{tag}.{session}.dnslog.cn` for dnslog)
+  - `poll(tag=None, wait=4.0) -> list[dict]` — interactions (optionally
+    filtered by tag, blocking up to `wait`); `[]` on no match, never raises
+  - `to_dict() -> dict` — serializable session state (no secrets)
+  - `close()` — release the provider subprocess/session
+- **CLI**: `--provider ... --tag gkn --wait 5` self-test; exit 1 when no
+  provider is usable.
+- **Error states**: unreachable APIs / dead subprocess → empty results, never
+  raises.
+
+### js_analyzer.py — new function (v5.4)
+
+- **`extract_endpoint_entries(source: str, base_url: str = "",
+  max_entries: int = 10) -> list[dict]`**
+  - **Input**: JS source text + the page origin to resolve relative paths
+  - **Output**: `[{"url": "https://origin/api/x?id=1", "param": "id",
+    "value": "1"}]` — discover_params-compatible entries for
+    `quick_combat.probe_injection()`. Only relative paths carrying a query
+    string are extracted (hardcoded hidden API endpoints).
+  - **Error states**: never raises; returns `[]` on no match.

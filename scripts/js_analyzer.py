@@ -386,6 +386,44 @@ def analyze_file_list(source_list: list[dict]) -> dict:
     }
 
 
+# ---- Hidden endpoint extraction (feeds parameter probing) --------------------
+
+_JS_ENDPOINT_RE = re.compile(
+    r"""["'`](/[A-Za-z0-9_\-./%~]*\?[A-Za-z0-9_\-]+=[^"'`\s]+)["'`]"""
+)
+
+
+def extract_endpoint_entries(source: str, base_url: str = "",
+                             max_entries: int = 10) -> list[dict]:
+    """Extract parameterized endpoints (path?query) hardcoded in JS source.
+
+    JS bundles are the highest-frequency source of hidden API endpoints in
+    SRC work. Only relative paths carrying a query string are kept — they
+    are resolved against base_url and returned in discover_params-compatible
+    shape so the caller can feed them straight into probe_injection:
+
+      [{"url": "https://origin/api/x?id=1", "param": "id", "value": "1"}]
+    """
+    from urllib.parse import urlsplit, parse_qsl, urljoin
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for m in _JS_ENDPOINT_RE.finditer(source):
+        rel = m.group(1)
+        if "#" in rel or len(rel) > 512:
+            continue
+        for name, value in parse_qsl(urlsplit(rel).query, keep_blank_values=True):
+            url = urljoin(base_url, rel) if base_url else rel
+            key = f"{url}|{name}"
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({"url": url, "param": name, "value": value})
+            if len(entries) >= max_entries:
+                return entries
+    return entries
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="JS Static Analyzer — client-side vulnerability mining (v3.0)")
     ap.add_argument("--source", help="JS source file path or '-'")

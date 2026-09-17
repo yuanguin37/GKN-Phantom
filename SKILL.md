@@ -1,7 +1,7 @@
 ---
 name: gkn-phantom
-version: 5.1.0
-description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.1 pivots from elaborate tiered detection plans to a streamlined combat pipeline: quick detect (nuclei + built-in probes) → auto PoC generation (curl/Python/HAR/Markdown) → auto exploit generation (functional Python scripts) → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, and full pytest test suite (30+ modules, 38 vulnerability types, 25+ WAF fingerprints, 20+ attack chain patterns). Trigger phrases include penetration test, pentest, security audit, vulnerability scan, security validation, and their Chinese equivalents.
+version: 5.3.0
+description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.3 completes the Quick Combat impact chain: quick detect (nuclei + built-in probes) → content-aware severity escalation (v5.2) → deep-dive adapters proving impact from exposed content (Actuator/GraphQL/Swagger, v5.3 C1) → parameter discovery with bounded error-based SQLi/SSTI probing (v5.3 C2) → auto PoC generation → auto exploit generation → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, and full pytest test suite (30+ modules, 38 vulnerability types, 25+ WAF fingerprints, 20+ attack chain patterns). Trigger phrases include penetration test, pentest, security audit, vulnerability scan, security validation, and their Chinese equivalents.
 ---
 
 # GKN-Phantom — Penetration Testing Skill
@@ -15,14 +15,23 @@ staging / dev / internal / lab environments. v5.1 introduces **Quick Combat Mode
 generates PoCs (curl/Python/HAR) and exploit scripts (functional Python) —
 bundling everything into a timestamped combat report with HTML index. This
 replaces the elaborate tiered detection plan approach with a practical
-detect → PoC → exploit workflow, informed by real combat feedback.
+detect → PoC → exploit workflow, informed by real combat feedback. v5.4 adds
+five combat layers on top: a domestic OA/component probe library (泛微/致远/
+通达/用友/禅道/JeecgBoot/若依/...), a full-site katana crawl feeding parameter
+probes, JS bundle mining with hidden-endpoint chaining, a real out-of-band
+channel (interactsh/ceye/dnslog) that validates blind SSRF via callback, and
+a cross-run combat memory that marks `[已提交]/[重复]` findings to avoid SRC
+duplicate submissions.
 
 The skill still supports the full state-machine pipeline for deep audits:
 scope check → pre-flight → reconnaissance → auth setup → active testing →
 validation → attack path analysis → report generation. 38 vulnerability types
 across 4 severity tiers, 25+ WAF fingerprints, and 20+ attack chain patterns.
 Every action passes through a Scope Guard, Risk Gate, and Rate Limiter; every
-finding carries reproducible evidence.
+finding carries reproducible evidence. A hard **Reproducibility Gate**
+(see below) guarantees that only live-replayed, control-compared findings
+reach the report — theoretical or assumed vulnerabilities are quarantined
+as `unverified_leads` and never reported as vulnerabilities.
 
 > **Safety Disclaimer**: This skill is restricted to authorized security
 > testing, internal security audits, and staging/dev/lab environment
@@ -92,7 +101,7 @@ The skill conforms to the OpenClaw Skill interface:
 ```ts
 interface Skill {
   name: string;                 // "gkn-phantom"
-  version: string;              // "1.0.0"
+  version: string;              // "5.1.0"
   description: string;
   inputSchema: object;          // see references/data_schemas.md -> InputSchema
   outputSchema: object;         // see references/data_schemas.md -> OutputSchema
@@ -288,9 +297,12 @@ DONE
 
    **v3/v4 Specialized Modules**: In addition to the core vulnerability detector,
    twelve specialized modules are available at ACTIVE_TESTING:
-   - `scripts/js_analyzer.py` (v3) — JS static analysis: secrets leakage, dangerous
-     sinks (eval/Function/innerHTML), postMessage misconfiguration, prototype
-     pollution, weak crypto, debug leaks, DOM clobbering.
+   - `scripts/js_analyzer.py` (v3, v5.4 UPGRADED) — JS static analysis: secrets
+     leakage, dangerous sinks (eval/Function/innerHTML), postMessage
+     misconfiguration, prototype pollution, weak crypto, debug leaks, DOM
+     clobbering; plus `extract_endpoint_entries()` (v5.4) which mines hidden
+     hardcoded parameterized API endpoints from bundles — fed into
+     `quick_combat.probe_injection()` by the combat pipeline.
    - `scripts/cve_correlator.py` (v3) — CVE correlation: matches discovered
      technologies (nginx, Apache, Tomcat, Spring, Django, etc.) with known CVEs,
      providing CVSS severity, exploit availability, and risk scoring.
@@ -310,23 +322,6 @@ DONE
      auto-detects nuclei, builds template index, smart selection (80+ tech-tag
      mappings), execution planning, result parsing, SHA-256 dedup, fallback guide.
    - `scripts/waf_evasion.py` (v4 NEW) — Advanced WAF bypass engine: protocol-level
-- `scripts/report_visualizer.py` (v5 NEW) — HTML/PDF visualization report
-  generator: SVG risk gauge, finding cards, attack path graph, asset table,
-  remediation matrix, dark/light mode, severity filter, PDF export via
-  weasyprint. Used at REPORT_GENERATION.
-- `scripts/browser_agent.py` (v5 NEW) — Interactive browser agent: Playwright-
-  driven multi-step auth, captcha/MFA/2FA handling, session persistence
-  (JSON/cookie-jar/pickle), JS execution for token extraction, screenshot
-  capture, proxy support. Used at AUTH_SETUP.
-- `scripts/poc_generator.py` (v5 NEW) — Professional PoC generator: curl
-  command, Python requests script, HAR 1.2, Markdown, raw HTTP output;
-  vulnerability-specific templates; automatic safety classification
-  (SAFE/CAUTION/DANGEROUS). Used at REPORT_GENERATION.
-- `scripts/rules_loader.py` (v5 NEW) — YAML rule configuration engine:
-  loads detection rules from ../rules/*.yaml, validates schema, hot-reload
-  via file mtime, exports RuleRegistry, backward compatible with
-  vuln_detector DetectionRule format. Used at INIT.
-
      evasion, 6 encoding bypass techniques, per-vuln obfuscation (10 SQLi + 10 XSS
      + 7 traversal + 8 cmd-injection), 10 WAF-specific rule sets, HPP, content-type
      switching, all bypass variants with technique descriptions.
@@ -343,6 +338,8 @@ DONE
    - `scripts/tech_fingerprint.py` (v4 NEW) — Deep technology stack fingerprinting:
      30+ server, 17 framework, 35+ cookie, 26 meta, 30 JS, 19 favicon hash, 20
      error page, 25 CDN/WAF, 12 DB error + OS detection patterns.
+
+   **v5 Add-on Modules** (used at their designated states):
    - `scripts/report_visualizer.py` (v5 NEW) — HTML/PDF visualization report:
      SVG risk score gauge, severity cards, collapsible finding cards with
      syntax-highlighted evidence, pure-SVG attack path graph, sortable asset
@@ -361,13 +358,90 @@ DONE
      rules from ../rules/*.yaml, validates schema, hot-reload (mtime watch),
      exports RuleRegistry with get_rules_by_tier/type, backward compatible.
      Used at INIT.
+   - `scripts/quick_combat.py` (v5.4) — Streamlined combat
+     pipeline with a layered impact chain:
+     (1) quick nuclei scan (scope-limited) + 7 built-in probes;
+     (2) v5.2 **Impact Escalation Layer** (`escalate_severity()`): quick-probe
+     findings re-graded from captured response content — live credentials
+     (env-style/AWS key/private key), `.git` config disclosure, phpinfo pages,
+     reachable backup archives → **high**; PII/sensitive-content score ≥ 3
+     (via `vuln_detector.classify_data_exposure()`, same threshold as the
+     full state machine) → **critical**. Every escalation records
+     `severity_escalated_from` + `escalation_reason`;
+     (3) v5.3 **Deep-Dive Adapters** (Phase 2.5, `deep_dive()`): routed by
+     finding type/path — Actuator (fetch `/actuator/env` + `/configprops`,
+     probe `/heapdump` presence; unmasked credentials or heapdump →
+     **critical**), GraphQL (full introspection; schema + mutation surface
+     exposed unauthenticated → **high**), Swagger (pull OpenAPI spec; no
+     security scheme → **high**). Bounded: ≤ 3 requests/finding, 8s timeout,
+     GET/POST-introspection only, zero overhead when no probe hits;
+     (4) v5.3 **Parameter Discovery + Injection Probing** (Phase 2.6):
+     `discover_params()` extracts same-origin URLs with query parameters
+     from the entry page (links + JS strings), `probe_injection()` runs
+     bounded non-destructive probes — error-based SQLi (3 generic payloads
+     matched against all 6 DB engine error signatures from
+     `advanced_sqli.DB_FINGERPRINT`) and SSTI arithmetic reflection
+     (4 payload variants with baseline differential) — emitting high-severity
+     sqli/ssti findings. Cap: 10 param URLs, 5 probed params per target;
+     (5) v5.4 **CN Component Probes** (Phase 2.55, `cn_probes.py`): domestic
+     OA/component unauthorized-access library (32 probes) — 泛微 e-cology
+     (BeanShell servlet, Ssologin.jsp, /services/), 致远 seeyon
+     (getSessionList, htmlofficeservlet, wpsAssistServlet), 通达 OA
+     (/ispirit/, /module/), 用友 NC (~ic servlets, uapws), 禅道, JeecgBoot
+     (jmreport `queryFieldBySql` one-shot SQLi verifier via POST →
+     **critical**), 若依 (druid prod-api/dev-api, /system/), 帆软, 亿邮,
+     金蝶, 蓝凌, 红帆, 万户. Probes support severity overrides, POST
+     one-shot verifiers and `not_patterns` soft-404 blacklists;
+     (6) v5.4 **katana Full-Site Crawl** (C3): when the katana binary is in
+     PATH, `crawl_katana()` crawls the whole site (depth 3, JSONL) — every
+     parameterized URL found anywhere feeds `probe_injection`, so SQLi/SSTi
+     coverage goes from "entry page params" to "the whole site". No katana →
+     silent fallback to entry-page-only discovery;
+     (7) v5.4 **JS Bundle Mining** (C4, `js_analyzer.py`): crawled + entry-page
+     JS bundles are analyzed (leaked secrets, dangerous sinks, debug
+     endpoints) AND mined for hidden hardcoded endpoints
+     (`extract_endpoint_entries()`) which feed back into parameter
+     injection probing — JS recon chains into active probing;
+     (8) v5.4 **Real OOB Channel** (C5, `oob_client.py`): replaces the
+     static `oob.authorized.test` placeholder with a pollable channel —
+     interactsh-client binary (self-hosted or oast.fun), ceye.io API, or
+     dnslog.cn. Open-redirect probes inject the live callback domain, and
+     `probe_blind_ssrf()` fires OOB-tagged callbacks into `url`-style
+     params; a confirmed callback emits a **validated** (not "detected")
+     blind-SSRF finding — OOB verification unlocks the validated tier for
+     blind vulnerability classes;
+     (9) v5.4 **Cross-Run Combat Memory** (C6): every run's finding
+     fingerprints are persisted to `combat_memory.json`; a re-scan marks
+     known findings `[已提交]` (submitted, user-flagged) / `[重复]` (repeat)
+     so SRC duplicate submissions are avoided. All v5.4 layers toggleable:
+     `--no-deep/--no-cn-probes/--no-crawl/--no-js/--no-memory/--oob-provider`.
+     After detection: auto PoC generation and auto exploit generation,
+     bundled into a timestamped combat report with HTML index. Entry point
+     for Quick Combat Mode.
+   - `scripts/exploit_generator.py` (v5.1 NEW) — Functional exploit script
+     generator: converts VALIDATED findings only into self-contained Python
+     demonstration scripts, organized by severity and type. Refuses findings
+     that are not `validated`. Used after VALIDATION.
 
 
 8. **VALIDATION** — Run `scripts/finding_validator.py`. For each candidate
-   finding, (re)execute the PoC, capture fresh request/response/timestamp, and
-   classify as `validated` (TP) or `false_positive` (FP). A finding is only
-   reported as `validated` if it is reproducible AND `safe_poc` is true.
-   LLM may assist classification but cannot override evidence.
+   finding, (re)execute the PoC LIVE against the target, capture fresh
+   request/response/timestamp, and classify into exactly one of three
+   outcomes:
+   - `validated` (TP) — the PoC succeeded in ≥2 independent live replays
+     AND the detection signal differs from the baseline/control response
+     (see Reproducibility Gate below) AND `safe_poc` is true.
+   - `false_positive` (FP) — the signal was reproduced by the control
+     request (no payload), or replays contradict the original signal.
+     Discard.
+   - `unverified_lead` — the finding cannot be reproduced live right now
+     (target unreachable, WAF blocks every variant, requires out-of-scope
+     action, or evidence is theoretical/assumed). Move to
+     `unverified_leads[]`. NEVER report it as a finding.
+   A candidate that cannot pass live replay is NOT a vulnerability — it is
+   a lead. Findings promoted on the basis of code reading, version
+   inference, scanner output, or LLM reasoning ALONE are forbidden in the
+   final report. LLM may assist classification but cannot override evidence.
 
    **Confidence Scoring (v2 NEW)**: Run `scripts/confidence_scoring.py` on
    each finding. Computes a multi-factor confidence score (0.0–1.0):
@@ -465,6 +539,67 @@ full spec. Summary:
   `reproducible` flag. Findings without complete evidence are rejected at
   VALIDATION.
 
+## Reproducibility Gate (Mandatory)
+
+Every finding in the final report MUST be a **reproduced vulnerability**,
+never a theoretical or hypothetical one. "The version has a known CVE",
+"the parameter looks injectable", "the scanner flagged it" — none of these
+is a finding until the impact is demonstrated live. This gate is applied at
+VALIDATION and enforced again at REPORT_GENERATION.
+
+### Hard rules
+
+1. **Live replay ≥ 2** — the PoC is executed against the live target at
+   least twice by `finding_validator.py`; both replays must reproduce the
+   detection signal. One-shot successes do not count.
+2. **Baseline / control comparison** — a control request (same endpoint,
+   benign or no payload) MUST be captured. The finding is valid only if the
+   payload response differs from the control in the expected way (error,
+   timing delta, content delta, status change). If the control already
+   produces the "signal", the finding is a false positive.
+3. **Demonstrated impact, not inferred impact** — each finding must name
+   the concrete impact actually observed (data read, file read, delay
+   measured, token/session obtained, action performed). Inferring impact
+   the target *could* have is forbidden.
+4. **Fresh evidence per report** — the request/response pair in
+   `evidence` must come from a replay executed during THIS run, not copied
+   from a scanner export or a previous session.
+5. **Quarantine of unverified candidates** — anything that cannot pass
+   rules 1–4 is moved to `unverified_leads[]` with the blocking reason
+   recorded. Leads are shown in the report appendix for follow-up but are
+   excluded from `findings[]`, the risk score, and the executive summary.
+
+### Banned sources of "findings"
+
+A finding MUST NOT originate solely from:
+
+- Version / CVE correlation without a working exploit path on THIS target
+  (cve_correlator output is recon input, not evidence).
+- Scanner (nuclei et al.) matches without a successful live replay.
+- Source-code reading or LLM reasoning without a live request/response.
+- Generic best-practice gaps (missing headers etc.) reported beyond their
+  actual demonstrated effect.
+
+### Verification method library
+
+Choose the strongest technique the vulnerability class allows:
+
+| Technique | Use for | Proof standard |
+| --- | --- | --- |
+| Echo / reflection | RCE, SSTI, XSS, SQLi (error/UNION), path traversal | Payload-controlled value appears in response (arithmetic result, file content, DB banner) |
+| Differential (boolean) | Blind SQLi, IDOR, auth bypass | True/False conditions produce measurably different responses across ≥2 replays each |
+| Time-based | Blind SQLi, command injection | Response delay ≈ requested sleep, confirmed twice, and control request is fast |
+| Out-of-band | SSRF, XXE, blind RCE | DNS/HTTP callback received at an authorized OOB sink tied to a unique per-finding token |
+| State change | Stored XSS, CSRF, logic flaws, file upload | Second request confirms the persisted effect (stored content served back, uploaded file reachable, order/balance changed) |
+| Session / token proof | Auth bypass, priv-esc, session fixation | A protected resource is actually returned with the forged/fixated/predicted credential |
+
+### Report-facing consequence
+
+For every `validated` finding, the report MUST include: minimal repro
+steps, the exact payload, the control-vs-payload evidence pair, replay
+count, and the observed impact. If any element is missing, the finding is
+downgraded to `unverified_leads[]` — no exceptions.
+
 ## LLM Usage Boundary
 
 The LLM (this agent) is permitted ONLY for:
@@ -480,6 +615,10 @@ The LLM is FORBIDDEN from:
 - Bypassing or weakening scope logic.
 - Generating or executing destructive payload plans.
 - Overriding evidence-based validation.
+- Declaring or describing a vulnerability as confirmed without live
+  request/response evidence from the current run (see Reproducibility
+  Gate). Phrasing such as "this should be exploitable" belongs in
+  `unverified_leads[]`, never in findings or the executive summary.
 
 ## Tool Usage Rules
 
@@ -504,11 +643,17 @@ The skill MUST return a FinalOutput object (see
   "risk_score": 0,
   "assets": {},
   "findings": [],
+  "unverified_leads": [],
   "attack_paths": [],
   "recommendations": [],
   "execution_log": []
 }
 ```
+
+`findings[]` contains ONLY reproducibility-gated `validated` findings.
+Candidates that could not be reproduced live during this run are returned
+in `unverified_leads[]` (with `blocking_reason`) and MUST NOT influence
+`risk_score` or `summary`.
 
 ## Testability Requirements
 
