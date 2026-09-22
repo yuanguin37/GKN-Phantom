@@ -1,6 +1,6 @@
 # GKN-Phantom 双场景使用手册
 
-> 适用版本：v5.5.0（v5.5：匹配机制升级为 Trie/Aho-Corasick 自动机预过滤，所有命令用法不变，扫描大响应更快）
+> 适用版本：v5.11.0（v5.8-v5.11 新增四个知识域：**AI/LLM 应用安全**（`ai_llm_security.md`）、**小程序安全**（`miniprogram_security.md`）、**Android 组件审计 + APK 逆向**（`apk_recon.py` + `android_audit.md`/`apk_reversing.md`）、**Windows PE 逆向**（`pe_reversing.md`）；v5.7 新增纪律层 `AGENTS.md`、业务逻辑/越权方法论层 `business_logic.py`、触发信号路由表与中文化；v5.5 起匹配机制为 Trie/Aho-Corasick 预过滤，命令用法不变，扫描大响应更快）
 > 适用场景：**护网行动（防守方自查/验证）** 与 **漏洞挖掘（授权 SRC / 众测 / 赏金）**
 > 红线：所有使用必须以**书面授权**为前提。护网场景测的是己方资产；漏洞挖掘场景测的是 SRC 公告范围内的资产。越界即违法。
 
@@ -170,7 +170,46 @@ detected → PoC 生成（poc_generator）→ finding_validator 复放 ≥2 次
 
 ---
 
-## 四、能力现状与路线图说明
+### 3.6 业务逻辑 / 越权 / 竞态（v5.7 新增）
+
+业务逻辑不是"扫"出来的，是**建模 + 证明**出来的。SRC 的严重/高危档位很大比例落在这里，
+而这块恰恰不能靠扫描器。工作流：**建板 → 建模五问 → 计划 → 交叉证明 → 判定 →（过门）成稿**。
+
+```bash
+# 1) 建板（任何目标的第一步）
+python scripts/clueboard.py init --target <目标> --focus "订单/支付链路越权与金额篡改"
+
+# 2) 业务建模五问 → 模型校验（errors 必须为空；gaps 要么补齐、要么记入线索板"未测"）
+python scripts/business_logic.py model --file model.json
+
+# 3) 出测试计划；--board-root 会把未决假设与角色矩阵待办直接写进线索板
+python scripts/business_logic.py plan --file model.json --out plan.md \
+  --board-root hunts --target <目标>
+
+# 4) 越权：生成 A/B 交叉证明请求对（粘进 Burp Repeater 执行并截图）
+python scripts/business_logic.py ab --url https://t/api/order/1001 \
+  --owner-token "session=A" --attacker-token "session=B"
+
+# 5) 竞态：生成速率受限的并发骨架（-P 已被压到授权速率，别手改大）
+python scripts/business_logic.py race --endpoint https://t/api/coupon/claim \
+  --replays 20 --authorized-rps 2
+
+# 6) 判定：缺"先证伪/对照"证据会直接返回 inconclusive；退出码 0=pass / 1=fail / 2=inconclusive
+python scripts/business_logic.py judge --file evidence.json
+```
+
+**两条硬标准（写报告前必须满足）**
+
+- **越权**：**A 的资源必须用 B 的凭证读到**。无凭证请求也 200 → 那是未授权访问不是 IDOR；
+  交叉返回 401/403 → 假设证伪，写 `clueboard.py add --section excluded` 且**不要上报**。
+- **竞态**：成功次数 > 业务允许的唯一成功数 **＋** 观察到状态差异 **＋** 串行重放未复现，三条齐才算成立。
+
+> **纪律层（v5.7）**：开工前读 `AGENTS.md`。**失败升级至少推进到 Level 4 才能写"无漏洞"结论**；
+> L1-L3 失败只能写"该载荷被过滤"，不能写"不存在该漏洞"。并发度不得超过授权通告允许速率，生产禁跑。
+
+---
+
+## 四、能力现状与知识域覆盖
 
 以下能力在 v5.1 中的现状，以及已规划升级（见改造方案）：
 
@@ -182,6 +221,21 @@ detected → PoC 生成（poc_generator）→ finding_validator 复放 ≥2 次
 | 认证后测试 | 完整状态机支持；护网场景直接可用，SRC 场景视厂商是否提供测试账号 |
 
 v5.3 起 Quick Combat 的深挖层默认开启（`--no-deep` 可关）：命中即深挖、按证据升级。SRC 提交前仍建议人工复核 `escalation_reason` / `deep_dive.impact` 与证据的一致性。
+
+### 知识域覆盖（v5.8-v5.11）
+
+原先在 `references/knowledge_domains_roadmap.md` 中规划四个知识域，**现已全部落地**：
+
+| 域 | 版本 | 手册 | 规则 | 关键口径 |
+|----|------|------|------|----------|
+| **AI/LLM 应用安全** | v5.8 | `references/ai_llm_security.md` | `rules/ai_llm_security.yaml`（11 条） | 注入按**行为差分**判（≥3 次复现 + 对照差异）；Agent 工具滥用**必须有落地回显**，模型"声称已执行"不算 |
+| **小程序安全** | v5.9 | `references/miniprogram_security.md` | `rules/miniprogram_security.yaml`（8 条） | 云数据库测试**只读且限条数**；接口越权走 `business_logic.py ab` 的 A/B 硬标准 |
+| **Android 组件 + APK 逆向** | v5.10 | `references/android_audit.md` · `references/apk_reversing.md` | `rules/android_security.yaml`（7 条） | 先 `apk_recon.py` 秒级快筛；组件类须给 **ADB 命令 + 实际效果** |
+| **Windows PE 逆向** | v5.11 | `references/pe_reversing.md` | `rules/pe_security.yaml`（4 条） | 动态分析必须在**隔离 VM**；崩溃须证明**执行流可控** |
+
+> 四域都**复用**既有的取证、判定与交付层（`business_logic.py` / `report_docx.py`），
+> 不引入新的扫描引擎，所以过门口径与 Web 域**完全一致**。
+> 各域"哪些证据才算数"的完整清单见 `SKILL.md` 的 **Domain invariants** 表。
 
 ---
 
@@ -199,5 +253,12 @@ v5.3 起 Quick Combat 的深挖层默认开启（`--no-deep` 可关）：命中�
 | JS 泄露挖掘 | `python scripts/js_analyzer.py --target https://host/app.js` |
 | 云配置检查 | `python scripts/cloud_security.py --target ...` |
 | 生成可视化报告 | `python scripts/report_visualizer.py --findings findings.json` |
+| 建/读线索板（跨会话续挖） | `python scripts/clueboard.py init --target T --focus "..."` ／ `brief --target T` |
+| 业务逻辑测试计划 | `python scripts/business_logic.py plan --file model.json --board-root hunts --target T` |
+| 越权 A/B 交叉证明 | `python scripts/business_logic.py ab --url U --owner-token A --attacker-token B` |
+| 竞态重放骨架 | `python scripts/business_logic.py race --endpoint U --replays 20 --authorized-rps 2` |
+| 证据判定（越权/竞态/逻辑） | `python scripts/business_logic.py judge --file evidence.json` |
+| 出提交稿（先过六道硬门） | `python scripts/report_docx.py --findings f.json --unit X --shots shots/` |
+| 只跑验证门不出稿 | `python scripts/report_docx.py --findings f.json --gate-only` |
 
 > 完整脚本契约见 `references/script_contracts.md`；安全模型见 `references/safety_policy.md`。

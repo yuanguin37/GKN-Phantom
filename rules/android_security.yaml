@@ -1,0 +1,297 @@
+# GKN-Phantom v5.10 — Android Component Security Detection Rules
+# ==============================================================
+# Covers the exported-component attack surface of Android apps:
+# activities, services, receivers, providers, webview bridges,
+# pendingintents, deep links and Binder/AIDL services.
+#
+# Companion handbooks: references/android_audit.md, references/apk_reversing.md
+# Fast triage: scripts/apk_recon.py
+#
+# AUTHORIZED TESTING ONLY. Self-owned apps or written-authorized targets.
+# Test devices must be the tester's own; never run ADB against another person's
+# device, and read other apps' data read-only with a row limit.
+#
+# Total: 7 rules
+
+- id: "android-exported-component"
+  type: "android_component_exposure"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<exported activity/service/receiver name>"
+    - "exported"
+    - "permission"
+  probe_description: >-
+    Invoke an exported component with no permission protection from outside the
+    app: am start / am startservice / am broadcast. Check whether the custom
+    permission (if present) has protectionLevel normal, in which case it is
+    effectively unprotected.
+  detection_signal: >-
+    A command issued without the app's privilege successfully launches the
+    component AND produces a real effect (an admin page shown, another user's
+    data returned, an action performed). "Exported but nothing happens" is a lead.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Exported component without effective authorisation. Remediation:
+    (1) Set android:exported="false" on every component that does not need
+    external invocation; (2) for components that must be exported, require a
+    signature-level permission (protectionLevel="signature") — a "normal"
+    permission provides no protection because any app can request it;
+    (3) validate the intent payload and re-check the caller's identity inside
+    the component; (4) never let a component parameter select an arbitrary
+    destination, file path or database query; (5) audit for intent redirection
+    to internal components; (6) add an instrumentation test asserting each
+    non-exported component cannot be launched externally.
+  cvss_vector: "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+  references:
+    - "https://developer.android.com/privacy-and-security/security-tips"
+    - "https://cwe.mitre.org/data/definitions/926.html"
+  tags:
+    - "android"
+    - "high"
+    - "component"
+    - "adb-repro-required"
+
+- id: "android-webview-bridge"
+  type: "android_webview_bridge"
+  severity: "critical"
+  tier: "critical"
+  risk_level: "L4"
+  target_param_hints:
+    - "addJavascriptInterface"
+    - "setAllowFileAccess"
+    - "setAllowUniversalAccessFromFileURLs"
+    - "<WebView loading URL>"
+  probe_description: >-
+    Locate a WebView that enables JavaScript plus a JS bridge (or permissive
+    file access) and can be pointed at attacker-controlled content. Load a test
+    page that calls the bridge, or use file:// to reach local files.
+  detection_signal: >-
+    The JS bridge is invoked and has a real effect (a file is read, a privileged
+    request is sent, internal data is returned). Presence of
+    addJavascriptInterface without reachability from external content is a lead.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Insecure WebView bridge. This is a CRITICAL finding because JavaScript
+    becomes a bridge into native capability. Remediation: (1) Remove
+    addJavascriptInterface for pages that can render untrusted content; if it is
+    unavoidable, target API 17+ and annotate only the strictly required methods
+    with @JavascriptInterface — never expose reflection, file or runtime
+    helpers; (2) disable file access:
+    setAllowFileAccess(false), setAllowFileAccessFromFileURLs(false),
+    setAllowUniversalAccessFromFileURLs(false); (3) validate and allow-list
+    every URL the WebView may load — prefer https and reject javascript:,
+    file:, content: and intent: schemes; (4) validate deep-link parameters
+    before using them as a WebView URL; (5) keep WebView updated and enable
+    Safe Browsing; (6) never load untrusted remote content in a WebView that
+    has a bridge.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H"
+  references:
+    - "https://developer.android.com/develop/ui/views/layout/webapps/load-local-content"
+    - "https://cwe.mitre.org/data/definitions/749.html"
+  tags:
+    - "android"
+    - "critical"
+    - "webview"
+    - "l4"
+    - "execute-proof-required"
+
+- id: "android-provider-exposure"
+  type: "android_provider_exposure"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "authorities"
+    - "exported"
+    - "grantUriPermissions"
+  probe_description: >-
+    Query an exported provider with adb shell content query/read/insert, using a
+    where clause of 1=1, and attempt path traversal through a file-backed
+    provider (../../..) aimed at another app's private files.
+  detection_signal: >-
+    Data belonging to another app or user is returned, or a file outside the
+    provider's root is read.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Exported ContentProvider without authorisation. Remediation:
+    (1) Set exported="false" unless the provider is genuinely shared and
+    protected by a signature-level permission; (2) implement openFile with a
+    canonical-path check that rejects any path escaping the intended root —
+    never join user input directly onto a root path; (3) use parameterised
+    queries in query() and never concatenate the selection into raw SQL;
+    (4) restrict grantUriPermissions and rely on temporary, narrowly scoped URI
+    grants instead of a globally exported provider; (5) return only the columns
+    the caller is entitled to see.
+  cvss_vector: "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/22.html"
+    - "https://cwe.mitre.org/data/definitions/89.html"
+  tags:
+    - "android"
+    - "high"
+    - "content-provider"
+    - "cross-app-data-required"
+
+- id: "android-intent-redirect"
+  type: "android_intent_redirect"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "intent"
+    - "url"
+    - "redirect"
+    - "next"
+  probe_description: >-
+    Pass a nested Intent or URI through an exported component that forwards it
+    internally, aiming at a non-exported screen, an internal WebView, or a
+    privileged service.
+  detection_signal: >-
+    Successful navigation to an internal non-exported screen with
+    attacker-controlled parameters.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Intent redirection. An exported component that forwards an externally
+    supplied Intent grants the sender the app's internal reach. Remediation:
+    (1) Never forward an untrusted Intent — extract only the expected
+    primitive fields and construct a fresh Intent server-side;
+    (2) allow-list the destination components that may be started from a
+    redirect path; (3) clear dangerous flags (FLAG_GRANT_READ_URI_PERMISSION,
+    FLAG_ACTIVITY_NEW_TASK) when re-launching; (4) verify the caller's package
+    or signature before servicing redirect requests; (5) test each exported
+    component with am start -n and a nested -d/-t payload.
+  cvss_vector: "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/441.html"
+    - "https://cwe.mitre.org/data/definitions/926.html"
+  tags:
+    - "android"
+    - "high"
+    - "intent-redirect"
+
+- id: "android-binder-privilege"
+  type: "android_binder_privilege"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<exported service with Binder stub>"
+    - "onBind"
+  probe_description: >-
+    Inspect a service's onBind for caller verification (getCallingUid /
+    package / permission). Where none exists, invoke its Binder methods from a
+    low-privilege app or via adb and observe the returned data or side effect.
+  detection_signal: >-
+    A low-privilege caller invokes a high-privilege service method and obtains
+    data or a real effect.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Binder service without caller verification. Remediation: (1) In onBind,
+    verify the caller with checkCallingOrSelfPermission or by comparing
+    getCallingUid against the expected signing certificate before returning the
+    Binder; (2) require a signature-level permission on the service;
+    (3) validate every AIDL argument and never let the caller specify a file
+    path, SQL fragment or URL directly; (4) keep high-privilege operations in a
+    separate non-exported service; (5) log caller identity for every
+    privileged method call.
+  cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/862.html"
+    - "https://cwe.mitre.org/data/definitions/284.html"
+  tags:
+    - "android"
+    - "high"
+    - "binder"
+    - "cross-privilege-required"
+
+- id: "android-pendingintent-hijack"
+  type: "android_pendingintent_hijack"
+  severity: "medium"
+  tier: "medium"
+  risk_level: "L2"
+  target_param_hints:
+    - "PendingIntent"
+    - "FLAG_MUTABLE"
+    - "setComponent"
+  probe_description: >-
+    Statically locate PendingIntents created with FLAG_MUTABLE whose base
+    Intent is empty or whose component/action can be filled by the receiver's
+    later setComponent/setPackage/fillIn call.
+  detection_signal: >-
+    A third party can rewrite the final destination of the PendingIntent and
+    trigger it.
+  safe_poc: true
+  requires_credentials: false
+  requires_human_approval: false
+  blocked_in_safe_mode: false
+  remediation: >-
+    Mutable PendingIntent. Remediation: (1) Use FLAG_IMMUTABLE whenever the
+    target is known at creation time (the default expectation on modern
+    Android); (2) set an explicit component, action and package on the base
+    Intent so a recipient cannot replace them; (3) avoid passing an empty base
+    Intent that a recipient is expected to fill; (4) review every
+    PendingIntent consumer that calls fillIn or setComponent on a
+    received Intent.
+  cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/441.html"
+    - "https://developer.android.com/privacy-and-security/security-tips"
+  tags:
+    - "android"
+    - "medium"
+    - "pendingintent"
+
+- id: "android-deeplink-hijack"
+  type: "android_deeplink_hijack"
+  severity: "medium"
+  tier: "medium"
+  risk_level: "L2"
+  target_param_hints:
+    - "scheme"
+    - "host"
+    - "url"
+    - "path"
+  probe_description: >-
+    Trigger the app's deep links with am start -a VIEW -d "<scheme>://..." and
+    probe the parameters that are used as a URL, file path or route selector.
+  detection_signal: >-
+    Navigation to an arbitrary internal screen, or a parameter is consumed as a
+    WebView URL / file path / API target.
+  safe_poc: true
+  requires_credentials: false
+  requires_human_approval: false
+  blocked_in_safe_mode: false
+  remediation: >-
+    Deep link hijack / parameter injection. Remediation: (1) Verify custom
+    schemes with a cryptographic signature or use Android App Links with
+    assetlinks.json so only your app can claim the host; (2) allow-list the
+    schemes, hosts and paths handled; (3) never pass a deep-link parameter
+    directly into a WebView URL, a file path, an Intent or a database query —
+    validate and normalise it first; (4) require the user's session for
+    sensitive screens reached via a link; (5) validate the link on the server
+    as well when it drives server-side behaviour.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/939.html"
+    - "https://cwe.mitre.org/data/definitions/601.html"
+  tags:
+    - "android"
+    - "medium"
+    - "deeplink"

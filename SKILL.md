@@ -1,7 +1,7 @@
 ---
 name: gkn-phantom
-version: 5.5.0
-description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.5 rebuilds the multi-pattern matching hot paths on a Trie/Aho-Corasick engine (pattern_matcher.py): tech fingerprinting, WAF detection, JS secret/sink scanning, DB error fingerprinting, and HTML tech detection now run one AC pass per response and execute only the regexes whose required literals are present — provably identical results, 3-15x faster on large bodies. v5.3 completes the Quick Combat impact chain: quick detect (nuclei + built-in probes) → content-aware severity escalation (v5.2) → deep-dive adapters proving impact from exposed content (Actuator/GraphQL/Swagger, v5.3 C1) → parameter discovery with bounded error-based SQLi/SSTI probing (v5.3 C2) → auto PoC generation → auto exploit generation → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, covering 38 vulnerability types, 25+ WAF fingerprints, and 20+ attack chain patterns across 35 modules. Trigger phrases include penetration test, pentest, security audit, vulnerability scan, security validation, and their Chinese equivalents.
+version: 5.11.0
+description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.5 rebuilds the multi-pattern matching hot paths on a Trie/Aho-Corasick engine (pattern_matcher.py): tech fingerprinting, WAF detection, JS secret/sink scanning, DB error fingerprinting, and HTML tech detection now run one AC pass per response and execute only the regexes whose required literals are present — provably identical results; the gate pays off as pattern count and body size grow, while small pattern sets on short bodies fall back to naive evaluation, which is faster there. v5.6 adds the cross-session clue board (clueboard.py: one Markdown board per target holding open assumptions, falsified leads, recovered keys and coverage) and the submission layer (report_docx.py: layered verification gate + SRC/CNVD DOCX with Step-style PoC, mandatory real screenshots and semantic naming), so analyst judgement survives context compression and validated findings become platform-ready reports. v5.3 completes the Quick Combat impact chain: quick detect (nuclei + built-in probes) → content-aware severity escalation (v5.2) → deep-dive adapters proving impact from exposed content (Actuator/GraphQL/Swagger, v5.3 C1) → parameter discovery with bounded error-based SQLi/SSTI probing (v5.3 C2) → auto PoC generation → auto exploit generation → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, covering 38 vulnerability types, 25+ WAF fingerprints, and 20+ attack chain patterns across 39 modules. v5.8-v5.11 extend coverage beyond the web into four knowledge domains, each shipped as a handbook plus a rule file plus its own type gates: AI/LLM application security (prompt injection is judged by a behaviour delta reproduced at least three times against a control request; agent tool abuse requires landed evidence, because a model claiming it executed something is never evidence), mini program security (package recovery through cloud development authorisation bypass, keeping the same A/B cross-proof bar for API IDOR as the web), Android component auditing plus APK reversing (scripts/apk_recon.py — a pure-standard-library binary AXML parser that emits a component matrix with export-risk classification, hardening fingerprints and secret/endpoint triage in seconds — with a no-Frida/no-root degraded path), and Windows PE reversing (a crash must be proven controllable and a hijack proven loaded, all dynamic work in an isolated VM). v5.8-v5.11 add Chinese trigger phrases for these domains: AI应用安全, 提示词注入, 大模型安全, 小程序, 云开发, 越权, APK, 安卓, 导出组件, 逆向, 样本分析, DLL劫持. Trigger phrases include 渗透测试, 打点, 漏洞挖掘, 授权测试, 安全审计, 漏洞扫描, 安全验证, 越权测试, 业务逻辑漏洞, 并发竞态, 出报告, 提交稿, 线索板, and their English equivalents (penetration test, pentest, security audit, vulnerability scan, security validation, IDOR, business logic flaw, race condition, report). v5.7 adds three layers: the discipline layer (AGENTS.md — ten execution disciplines, coverage self-check, the Level 1-7 escalation ladder with "never conclude 'no vulnerability' before Level 4", cross-interface five questions); the business-logic methodology layer (business_logic.py — five-question state-machine modelling, role matrix, A/B cross-proof for IDOR, rate-bounded race-replay planning, evidence adjudication aligned with the report gate); and a trigger→module routing table plus Chinese trigger phrases and a conclusion-first output skeleton.
 ---
 
 # GKN-Phantom — Penetration Testing Skill
@@ -9,7 +9,37 @@ description: GKN-Phantom — production-grade automated penetration testing and 
 ## Overview
 
 Execute automated, authorized penetration testing and security validation in
-staging / dev / internal / lab environments. v5.1 introduces **Quick Combat Mode**
+staging / dev / internal / lab environments. v5.6 adds the two layers that sit
+outside the scan pipeline itself: a **cross-session clue board**
+(`scripts/clueboard.py`) so analyst judgement survives context compression, and
+a **submission layer** (`scripts/report_docx.py`) that gates findings through
+six hard verification gates and emits platform-ready DOCX reports. v5.7 adds
+the three layers that make the output trustworthy rather than merely complete:
+a **discipline layer** (`AGENTS.md` — ten execution disciplines, coverage
+self-check, the Level 1-7 escalation ladder, cross-interface five questions),
+a **business-logic methodology layer** (`scripts/business_logic.py` — five-question
+state-machine modelling, role matrix, A/B cross-proof for IDOR, rate-bounded
+race-replay planning, and evidence adjudication whose pass bar matches the
+report gate), and a **trigger → module routing table** plus Chinese trigger
+phrases and a conclusion-first output skeleton. v5.8–v5.11 extend coverage
+beyond the web into **four knowledge domains**, each shipped as a handbook
+plus rule file plus type gates: **AI/LLM application security** (v5.8 —
+prompt injection, indirect injection, system prompt leak, jailbreak, data
+exposure, RAG poisoning, memory poisoning, agent tool abuse, excessive
+agency, sandbox escape, tool-description poisoning, output-side XSS; the
+verdict for injection is a behaviour delta reproduced ≥3 times with a control
+request, and for tool abuse it is LANDED evidence — a model claiming it ran
+something is never evidence); **mini program security** (v5.9 — package
+recovery, decompilation, key/endpoint extraction, cloud development
+authorisation bypass; API IDOR keeps the same A/B bar as the web); **Android
+component auditing plus APK reversing** (v5.10 — `scripts/apk_recon.py` is a
+pure-standard-library binary-AXML parser that emits a component matrix with
+export-risk classification, hardening fingerprints and secret/endpoint triage
+in seconds, backed by `references/android_audit.md` and
+`references/apk_reversing.md` with a no-Frida/no-root degraded path); and
+**Windows PE reversing** (v5.11 — static structure and packer identification,
+isolated-VM dynamic behaviour, memory-corruption and DLL-hijacking location;
+a crash must be proven controllable before it counts). v5.1 introduces **Quick Combat Mode**
 (`scripts/quick_combat.py`): a streamlined pipeline that runs a fast nuclei scan
 (with scope limits preventing timeout), 7 built-in quick probes, then auto-
 generates PoCs (curl/Python/HAR) and exploit scripts (functional Python) —
@@ -28,8 +58,9 @@ fingerprinting, HTML tech detection — are now evaluated through a
 Trie/Aho-Corasick gate that reads each response once and runs only the
 regexes whose required literals are actually present. Results are provably
 identical to the previous per-pattern scans (property-tested against naive
-iteration); large bodies scan 3-15x faster and small bodies automatically
-keep the naive path.
+iteration). The gate pays off as the pattern set and body size grow; with few
+patterns on short bodies the naive path is faster and is kept automatically
+(measured at 0.73x for 8 patterns on a 60KB body).
 
 The skill still supports the full state-machine pipeline for deep audits:
 scope check → pre-flight → reconnaissance → auth setup → active testing →
@@ -96,6 +127,10 @@ Use this skill when ANY of the following apply:
   path analysis.
 - An agent needs to verify that targets are in-scope before any probing.
 
+Also match these Chinese trigger phrases directly (see the bilingual section
+below): 渗透测试 / 打点 / 漏洞挖掘 / 授权测试 / 安全审计 / 漏洞扫描 / 安全验证 /
+越权 / 业务逻辑漏洞 / 并发竞态 / 出报告 / 提交稿 / 线索板.
+
 Do NOT use this skill when:
 
 - The user cannot confirm written authorization for the target.
@@ -109,7 +144,7 @@ The skill conforms to the OpenClaw Skill interface:
 ```ts
 interface Skill {
   name: string;                 // "gkn-phantom"
-  version: string;              // "5.1.0"
+  version: string;              // "5.6.0"
   description: string;
   inputSchema: object;          // see references/data_schemas.md -> InputSchema
   outputSchema: object;         // see references/data_schemas.md -> OutputSchema
@@ -611,6 +646,271 @@ steps, the exact payload, the control-vs-payload evidence pair, replay
 count, and the observed impact. If any element is missing, the finding is
 downgraded to `unverified_leads[]` — no exceptions.
 
+## Submission & Memory Layers (v5.6)
+
+Two modules close gaps the scan pipeline itself cannot close: what the analyst
+remembers between sessions, and what the reviewer receives at the end.
+
+### Clue board — cross-session analyst memory (`clueboard.py`)
+
+`state.py` persists the machine state (phase, history, checkpoint). It does NOT
+persist judgement. Before compressing or ending a session, and at the start of
+any session that resumes a target, the agent MUST read the board:
+
+- New target → `clueboard.py init --target <T> --focus "..."` then work.
+- Resuming → `clueboard.py brief --target <T>` (cheap digest: focus, open
+  assumptions, excluded leads, todos, coverage).
+- After every conclusion → `add` the assumption / host / path / key, or `cover`
+  the coverage block. **A conclusion that is not on the board does not count.**
+- Before probing anything → `check --section excluded --text "..."`; exit 1
+  means it was already falsified last session. Do not re-test it.
+
+Board rules: state vocabulary is closed (`假设` / `已证伪` / `已证实` / `待打`);
+open assumptions are capped at 5; raw material (full JS, unmasked credentials)
+goes to `hunts/<target>/raw/`, never on the board.
+
+### Submission gate — what is allowed into a report (`report_docx.py`)
+
+A finding may become a submission DOCX **only** after passing the layered
+verification gate. The hard gates are non-negotiable (缺一不报):
+
+| Gate | Requirement |
+| --- | --- |
+| 硬门0 先证伪 | A negative-control experiment is recorded (`falsification` / `negative_control`) |
+| 硬门1 PoC 可复现 | Raw request + response, observable tool (not `llm`/`scanner`/`version`), replayed ≥ 2× |
+| 硬门2 危害为链路终局 | Concrete demonstrated impact; no "理论上/could be" wording; `status == validated` |
+| 硬门3 服务端边界确认 | Server-side or permission-boundary evidence, not a browser-JS artifact |
+| 硬门4 类型命门 | Type-specific key: IDOR → A/B proof; SQLi → `database()`; SSRF → internal echo; upload → getshell/parse; RCE → command output; data leak → ≥3 PII fields |
+| 硬门5 链式追问到终局 | Same-root-cause endpoints enumerated, or why stopping is recorded |
+
+Findings that do not pass stay **leads**: they are reported in the gate output
+with the blocking reason and MUST NOT be written into a DOCX or counted as
+findings. Quality items (cross-environment replay, WAF note) do not block, but
+must be stated in the report.
+
+**Screenshot iron rule**: every Step needs a real screenshot taken from the
+browser (opening the original URL) or Burp Repeater. Never synthesise, never
+replace with prose. The builder reports each missing screenshot as a warning
+instead of skipping it silently. Screenshots may be a text-free evidence block
+only when the target content provably cannot render in a browser — and the
+report must say why.
+
+De-AI wording scan: template connectives, dash-trailing explanations,
+adjective hype, and screenshot meta-descriptions are flagged before delivery.
+
+## Execution Discipline (v5.7)
+
+`SKILL.md` defines the **contract** — what the skill can do and must not do.
+`AGENTS.md` (repo root) defines the **discipline** — how it must be done.
+**Read `AGENTS.md` before the first probe of any session.** It is not advisory:
+everything that can be enforced in code already is (see the carrier column).
+
+| # | Discipline | Enforced / supported by |
+| --- | --- | --- |
+| 一 | JS 不吃透，不发包（先还原前端再动手） | `js_analyzer.py`, `quick_combat.py` JS bundle mining |
+| 二 | 覆盖度自检 `✅已测 / ❌未测 / 🔄变种 / 💡关联` | `clueboard.py cover --tested/--untested/--variants/--related` |
+| 三 | 漏洞嗅觉（时间/体量/措辞/状态码/字段异常） | 记录即落板，`clueboard.py add` |
+| 四 | 业务建模五问（状态机+角色矩阵+非法路径+校验层+并发） | `business_logic.py model / plan / ab / judge` |
+| 五 | 失败升级 Level 1-7，**至少到 L4 才能下「无漏洞」结论** | `waf_evasion.py`, `adaptive_engine.py` |
+| 六 | 跨接口关联五问（信息流/凭证/状态/权限/时序） | `attack_path.py` |
+| 七 | 开发者视角优先测项（新功能/内部接口/旧 API/导出/回调） | 本 skill 的路由表（下节） |
+| 八 | 信息收集要脏，**线索当轮落盘**，原始素材进 `raw/` | `clueboard.py`, `passive_recon.py` |
+| 九 | 对抗意识（防御在哪层 → 规则 → 边界 → 差异） | `adaptive_engine.detect_waf` |
+| 十 | 暂停思考：遇加密签名/权限不明/3 连失败/新攻击面即切专项 | 本 skill 的路由表（下节） |
+
+Non-negotiable hard rules from the discipline layer:
+
+1. **At most 5 open assumptions per target** — close one before opening another.
+2. **A conclusion that is not on the clue board does not count.**
+3. **Before probing anything**, run `clueboard.py check --section excluded --text "..."`;
+   exit 1 means it was already falsified — do not re-test it.
+4. **Failure at L1-L3 may only be written as "this payload was filtered"**, never as
+   "the vulnerability does not exist".
+5. **Scope Guard is not bypassable** by any clause of `AGENTS.md` or this file.
+
+Also required per finding: the six-question exploitability assessment
+(stable repro / preconditions / impact surface / attack cost / fix priority /
+limits & mitigations). Findings missing any answer must not be graded.
+
+## Business Logic & Authorization Methodology (v5.7)
+
+`rules/` already carried `logic_flaw` / `race_condition` / `mass_assignment` as
+detection entries, but a rule cannot model a business. `scripts/business_logic.py`
+turns those rules into a workflow — see `references/business_logic_playbook.md`.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `model --file m.json` | Validate the five-question state-machine model (`errors` = structural, `gaps` = missing question) |
+| `plan --file m.json [--out plan.md] [--board-root hunts --target T]` | Emit the test plan (skip / replay / overwrite tests, role matrix, A/B targets, race targets, remediation) and optionally push assumptions + todos to the clue board |
+| `ab --url U --owner-token A --attacker-token B` | Generate the three-request A/B cross-proof set (baseline / cross / unauthenticated control) |
+| `race --endpoint U --replays N --authorized-rps R` | Generate a **rate-bounded** concurrent replay skeleton (`xargs -P` / thread pool / Turbo Intruder) |
+| `judge --file e.json` | Adjudicate evidence into `pass` / `fail` / `inconclusive` (exit 0/1/2) |
+| `scene --name payment\|entitlement\|flow` / `fix --type <t>` | Print the scenario attack table / remediation set |
+
+**The only decidable standard for IDOR** (mirrors 硬门4 类型命门 `idor`):
+
+> A's resource must be readable with **B's** credential.
+
+A 200 from an unauthenticated request is **not** IDOR — it is unauthenticated
+access, a different type with a different fix. A 401/403 on the cross request
+**falsifies** the assumption: write it to `excluded` and do not report it.
+
+**The only decidable standard for a race condition**: success count > the
+business-allowed unique successes, **plus** an observed state delta,
+**plus** a serial-replay control that did not reproduce it (all three).
+
+`judge` refuses to return `pass` without a falsification/control record — the
+same bar as 硬门0. `submission_type` and `gate_hint` are aligned with
+`report_docx.TYPE_GATES`, so a methodological pass still has to clear the six
+hard gates before it can become a DOCX.
+
+## Knowledge Domain Layers (v5.8–v5.11)
+
+Coverage extends beyond the web into four domains. Each ships as **handbook +
+rule file + type gates**. None introduces a new scan engine: every domain reuses
+the same evidence, adjudication (`business_logic.py`) and delivery
+(`report_docx.py`) layers, so the pass bar does not move.
+
+| Version | Domain | Handbook | Rules | Type gates added |
+| --- | --- | --- | --- | --- |
+| v5.8 | AI / LLM application | `references/ai_llm_security.md` | `rules/ai_llm_security.yaml` (11) | `prompt_injection`, `agent_tool_abuse` |
+| v5.9 | Mini program | `references/miniprogram_security.md` | `rules/miniprogram_security.yaml` (8) | `hardcoded_secret`, `mp_api_idor`, `cloud_db_exposure`, `cloud_function_abuse`, `mp_login_logic`, `mp_payment_logic`, `mp_render_injection` |
+| v5.10 | Android / APK | `references/android_audit.md`, `references/apk_reversing.md` | `rules/android_security.yaml` (7) | `android_component_exposure`, `android_webview_bridge`, `android_provider_exposure`, `android_intent_redirect`, `android_binder_privilege`, `android_pendingintent_hijack`, `android_deeplink_hijack` |
+| v5.11 | Windows PE | `references/pe_reversing.md` | `rules/pe_security.yaml` (4) | `memory_corruption`, `format_string`, `dll_hijacking`, `missing_mitigation` |
+
+### Domain invariants (do not relax)
+
+| Domain | The bar |
+| --- | --- |
+| AI/LLM injection | A **behaviour delta reproduced ≥3 times** plus a control request whose output differs. One apparent compliance is nothing. |
+| AI/LLM tool abuse | **Landed evidence only** — command echo, internal echo, real OOB callback, file content. A model *claiming* it executed something is never evidence. |
+| Mini program API IDOR | The same three-request A/B cross-proof as web `idor`. The client carries the whole authorisation story, so identity must never be inferred from a request field. |
+| Mini program cloud data | Cross-user or anonymous read, with a de-identified sample; tests are read-only and row-limited. |
+| Android components | A **copy-pasteable ADB command plus a real effect**. "Exported but nothing happens" is a lead, not a finding. |
+| Android degraded path | No-Frida / no-root coverage must be documented as a limitation, never silently skipped. |
+| PE memory corruption | A crash must be proven **controllable** (EIP/RIP overwritten by input). A bare crash is a lead. |
+| PE DLL hijacking | The test DLL must be **loaded and executed**, and the report must state which of hijack / search-order / phantom applies. |
+
+**Fast triage for mobile targets**: `python3 scripts/apk_recon.py app.apk --secrets`
+— pure standard library, seconds, no jadx/apktool. It emits the component matrix
+with export-risk classification, hardening `lib*.so` fingerprints, and masked
+secret plus endpoint hits (internal addresses and high-value paths surfaced
+separately).
+
+**Compliance per domain**: AI/LLM testing is limited to self-owned or
+written-authorized applications, and any poisoning payload must be removed
+afterwards with the cleanup recorded on the clue board. Mini program cloud tests
+are read-only and row-limited. Android analysis is limited to self-owned apps.
+PE analysis happens only in an isolated snapshot-recoverable VM, and DLL hijack
+verification never replaces a DLL in the system directory.
+
+## Trigger → Module Routing (v5.7)
+
+Route by trigger signal instead of walking the pipeline linearly.
+
+### Scene → module
+
+| Trigger signal | Module | Deep action |
+| --- | --- | --- |
+| New target / resuming after compression / keep host+path+key across sessions | `clueboard.py` | `init` → work → `add` back; `brief` first when resuming |
+| Unclear attack surface; find endpoints / keys / subdomains | `passive_recon.py` → `js_analyzer.py` | Asset mapping, JS/webpack/source-map recovery, historical assets |
+| Path absent from main-site JS / no account / 405 or `data:[]` / frontend crypto treated as auth | `directory_fuzzer.py` + playbook §6 | Zero-identity surface recovery, response-fingerprint triage, crypto falsification |
+| Parameter concatenation / dynamic sort / JSON query / template render / command sink | `advanced_sqli.py`, `advanced_injection.py` | Error·boolean·time-blind (capped), SSTI arithmetic reflection |
+| Login / register / password reset / captcha / OAuth / JWT, IDOR, role param controllable | `vuln_detector.py` critical + `business_logic.py ab` | Auth bypass, A/B cross-proof, multi-tenant isolation |
+| Payment / order / refund / withdraw / coupon / points / approval / stock, concurrency | `business_logic.py` | State-machine modelling, amount tampering, race replay |
+| Upload / download / export / import / preview | `vuln_detector.py` file_upload + `exploit_generator.py` | getshell/parse proof, path traversal, Zip Slip |
+| URL-driven fetch / proxy / webhook / callback / image preview | `oob_client.py` + `advanced_injection.py` | Real OOB callback + internal echo |
+| XML / SOAP / serialized objects / deep JSON merge | `advanced_injection.py` | Deserialization, XXE, prototype pollution |
+| Reflected/stored/DOM XSS, postMessage, CORS, CSRF | `vuln_detector.py` xss + `browser_agent.py` | In-browser execution proof |
+| REST / GraphQL / gRPC / WebSocket / Swagger / debug endpoints | `api_auditor.py` | All-method testing, BOLA, schema mining |
+| Cloud / container / K8s / middleware / CI-CD / dependency CVE | `cloud_security.py` + `cve_correlator.py` | Misconfig, unauth middleware, supply chain |
+| Source code or decompiled artefacts available | manual audit + `vuln_detector.py` | Input point → propagation → sink |
+| Payload blocked / 403 / WAF | `waf_evasion.py` + `adaptive_engine.py` | Failure escalation L1-L4 |
+| Domestic OA/middleware (泛微/致远/通达/用友/禅道/JeecgBoot/若依…) | `cn_probes.py` | 32 unauth probes + fingerprint triage |
+| AI chat / assistant / copilot / RAG Q&A / agent tool calling / code interpreter / multimodal parsing | `references/ai_llm_security.md` + `rules/ai_llm_security.yaml` | Behaviour diff to prove the model was rewritten → land it with the existing layers (`oob_client.py`, command echo, `business_logic.py ab`). **A model claiming execution is never evidence.** |
+| Mini program (WeChat / Alipay / Douyin / Baidu), cloud development, `.wxapkg`/`.apkg` decompilation | `references/miniprogram_security.md` + `rules/miniprogram_security.yaml` | Package recovery → decompile → key/endpoint extraction → authorisation verification (reuse `business_logic.py ab`). Cloud DB tests read-only and row-limited; API IDOR keeps the web `idor` bar. |
+| App / APK / exported component / WebView / Provider / Deep Link / packed bundle | `scripts/apk_recon.py` → `references/android_audit.md` + `references/apk_reversing.md` | Triage in seconds (component matrix + secrets + endpoints + hardening) before deciding what to dig into; component findings need an ADB command plus a real effect. |
+| exe / dll / sys / sample / packed binary / crash triage | `references/pe_reversing.md` | Static (structure, mitigations, packer) → isolated-VM dynamic behaviour → crash and hijack location. **A crash must be proven controllable; a hijack must be proven loaded.** |
+| About to deliver / write a report | `report_docx.py` | Layered gate → DOCX archive |
+
+### Vulnerability type → module
+
+| Type | Module |
+| --- | --- |
+| `idor` / `priv_esc` / `auth_bypass` / multi-tenant | `vuln_detector.py` critical tier + `business_logic.py ab` |
+| `logic_flaw` / `race_condition` / `mass_assignment` | `business_logic.py` (`rules/high.yaml` entries are the detection seed) |
+| `sqli` / `nosql_injection` / `ldap_injection` / `ssti` / `command_injection` | `advanced_sqli.py`, `advanced_injection.py` |
+| `xss` / `csrf` / `cors_misconfig` / `open_redirect` | `vuln_detector.py` medium tier + `browser_agent.py` |
+| `ssrf` / `xxe` / `deserialization` / `prototype_pollution` | `oob_client.py`, `advanced_injection.py` |
+| `file_upload` / `path_traversal` / `directory_listing` | `vuln_detector.py` high/low tiers |
+| `info_leak` / `misconfig` / `component_exposure` / `graphql_introspection` | `cloud_security.py`, `cn_probes.py`, `api_auditor.py` |
+| `jwt_deep_analysis` / `oauth_misconfig` / `session_fixation` | `vuln_detector.py` high/medium tiers |
+| `data_exposure` / `http_smuggling` / `rce` | critical tier (`rce` and `http_smuggling` are L4 — human approval) |
+| `weak_credential` / `captcha_bypass` / `email_injection` / `crlf_injection` | medium tier + `adaptive_engine.py` |
+| `prompt_injection` / `agent_tool_abuse` / `rag_poisoning` / `excessive_agency` / `sandbox_escape` / `system_prompt_leak` | `references/ai_llm_security.md` + `rules/ai_llm_security.yaml` (`agent_tool_abuse`, `sandbox_escape` are L4 — human approval) |
+| `mp_api_idor` / `cloud_db_exposure` / `cloud_function_abuse` / `mp_login_logic` / `mp_payment_logic` / `mp_render_injection` / `hardcoded_secret` | `references/miniprogram_security.md` + `rules/miniprogram_security.yaml` |
+| `android_component_exposure` / `android_webview_bridge` / `android_provider_exposure` / `android_intent_redirect` / `android_binder_privilege` / `android_pendingintent_hijack` / `android_deeplink_hijack` | `references/android_audit.md` + `rules/android_security.yaml` (`android_webview_bridge` is L4) |
+| `memory_corruption` / `format_string` / `dll_hijacking` / `missing_mitigation` | `references/pe_reversing.md` + `rules/pe_security.yaml` (`memory_corruption` is L4) |
+
+### SRC high-value priority (spend effort here first)
+
+| Severity | Types | Route |
+| --- | --- | --- |
+| 严重 | RCE / command injection; SQLi on core tables; arbitrary file read/write; SSRF into intranet | critical + high tiers, `oob_client.py` |
+| 高危 | Vertical privesc; payment logic; bulk PII leak; arbitrary password reset; SMS bombing; Android exported-component with a real effect; Agent tool abuse with landed evidence; mini program cloud DB cross-user read | `business_logic.py`, `unauth` route, `apk_recon.py`, `ai_llm_security.md` |
+| 中危 | IDOR (web / mini program); stored XSS; CSRF on critical actions; unauth access; System Prompt leak; RAG poisoning (with cross-account proof); PendingIntent / Deep Link hijack | type table above |
+
+### Combination playbook
+
+- Info leak → IDOR: `js_analyzer` finds endpoints → `business_logic.py ab` proves it
+- Component exposure → credentials → admin login: `cn_probes`/`cloud_security` → auth bypass
+- Upload → intranet: `file_upload` yields a path → `oob_client` drives SSRF
+- Low-severity chaining: finish the single point, run the cross-interface five
+  questions, then `attack_path.py` — grade by the chain's terminal impact
+- Cross-session resume: always `clueboard.py brief` first, then fill only the
+  blanks already on the board
+
+## 中文触发短语与结论口径 (Chinese Triggers & Conclusion-First Output)
+
+中文环境下按下列触发短语直接命中本技能，无需翻译成英文。
+
+**场景触发短语**：渗透测试 · 打点 · 漏洞挖掘 · 授权测试 · 安全审计 · 漏洞扫描 ·
+安全验证 · 资产测绘 · 攻击面梳理 · 内网自查 · 护网自查
+
+**专项触发短语**：
+
+| 说法 | 路由 |
+| --- | --- |
+| 越权 / 水平越权 / IDOR / 能不能看别人的订单 | `business_logic.py ab` + `judge` |
+| 垂直越权 / 普通用户变管理员 / 提权 | `vuln_detector.py` critical + `business_logic.py ab` |
+| 业务逻辑 / 金额篡改 / 价格篡改 / 状态跳变 / 跳过支付 | `business_logic.py plan` |
+| 并发 / 竞态 / 条件竞争 / 重复领取 / 券被薅 | `business_logic.py race` + `judge` |
+| 认证绕过 / 任意密码重置 / 验证码绕过 / JWT | `vuln_detector.py` critical |
+| 注入 / SQL注入 / 命令执行 / SSTI / 模板注入 | `advanced_sqli.py`, `advanced_injection.py` |
+| 上传 / 下载 / 任意文件读取 / 路径穿越 | `vuln_detector.py` file_upload |
+| SSRF / 内网探测 / 打内网 / 云元数据 | `oob_client.py` |
+| 云配置 / 未授权中间件 / Actuator / Druid / Swagger | `cloud_security.py`, `cn_probes.py` |
+| 泛微 / 致远 / 通达 / 用友 / 禅道 / 若依 / JeecgBoot | `cn_probes.py` |
+| payload 被拦 / 被 WAF 拦 / 403 绕过 | `waf_evasion.py`（失败升级 L1-L4） |
+| 出报告 / 写报告 / 提交稿 / 生成漏洞报告 / 成稿 | `report_docx.py`（先过六道硬门） |
+| 线索板 / 记线索 / 跨会话继续挖 / 上次挖到哪 | `clueboard.py`（先 `brief`） |
+
+**结论先行的输出骨架**（对话内快速结论用；正式交付一律以 `report_docx.py` 的 DOCX 为准）：
+
+```
+【结论】<漏洞名称> — <建议危害等级：严重/高危/中危/低危>
+【影响资产】<URL / 组件 / 业务单元>
+【可利用性】可稳定复现：YES/NO ｜ 前置条件：<登录态/角色/网络位置/版本>
+【证据】<原始请求块> → <响应差异> → <实际观察到的影响>
+【根因】输入点 → 传播链 → 危险点（缺失的校验）
+【修复】一句话结论 + 代码级/配置级要点
+【覆盖度】✅ 已测 … ｜ ❌ 未测 … ｜ 🔄 变种 … ｜ 💡 关联 …
+```
+
+写作纪律：结论在前，推导在后；只写**实际观察到的影响**，不写理论影响；
+危害等级以"建议"形式给出；**CVSS 评分不由本技能自评**（交提交平台评定）；
+未验证的线索写进线索板与 `unverified_leads`，不写进结论。
+
 ## LLM Usage Boundary
 
 The LLM (this agent) is permitted ONLY for:
@@ -829,6 +1129,56 @@ Deterministic, executable helpers. Read them before modifying.
   Injection + LDAP/NoSQL), WAF-specific rules for 10 WAF families, HTTP
   parameter pollution, content-type switching. All bypass variants include
   technique descriptions. Used at ACTIVE_TESTING.
+- `scripts/clueboard.py` (v5.6 NEW) — **Cross-session clue board**: one
+  human-readable Markdown board per TARGET at `hunts/<target>/CLUEBOARD.md`.
+  Complements `state.py` (machine state, per run) with the analyst layer
+  (judgements, open assumptions, falsified leads, recovered keys). Call it at
+  the START of every session that touches an existing target (`read` / `brief`)
+  and whenever a conclusion is reached (`add` / `cover`). Subcommands:
+  `init` `read` `brief` `add` `cover` `check` `status` `list`. Duplicate leads
+  are refused (`[重复]` marker) so already-tested paths are not re-tested, and
+  open assumptions are capped at 5. Raw material goes to `hunts/<target>/raw/`.
+- `scripts/report_docx.py` (v5.6 NEW) — **Submission-grade DOCX builder +
+  layered verification gate**. Turns `validated` findings into the DOCX that
+  SRC / CNVD / EDUSRC platforms actually accept (fixed Heading-2 skeleton,
+  Step-style PoC with raw request blocks, embedded real screenshots, semantic
+  filename `资产 存在 漏洞类型 漏洞.docx`). Refuses to write a report for any
+  finding that fails the hard gates (先证伪 / 可复现 / 危害终局 / 服务端边界 /
+  类型命门 / 链式追问), runs a pre-write duplicate check, and reports missing
+  screenshots instead of silently skipping them. Degrades to `--gate-only`
+  when python-docx is absent. CLI: `--emit-template`, `--findings`,
+  `--gate-only`, `--mode src|0day|edu`, `--unit`, `--shots`, `--min-severity`.
+  Used at REPORT_GENERATION, after `report_generator.py`.
+- `scripts/business_logic.py` (v5.7 NEW) — **Business-logic / authorization /
+  race methodology engine**. Turns the `logic_flaw` / `race_condition` /
+  `mass_assignment` rules into a workflow: `model` validates the five-question
+  state-machine model, `plan` emits the test plan (skip / replay / overwrite
+  tests, role matrix, A/B targets, race targets, remediation) and can push
+  assumptions + todos straight onto the clue board, `ab` generates the
+  three-request IDOR cross-proof set (baseline / cross / unauthenticated
+  control), `race` generates a **rate-bounded** concurrent replay skeleton,
+  `judge` adjudicates evidence into `pass` / `fail` / `inconclusive`
+  (exit 0/1/2) and refuses to pass anything without a falsification record.
+  `submission_type` / `gate_hint` are aligned with `report_docx.TYPE_GATES`.
+  Sends no traffic — it plans and adjudicates only.
+- `scripts/apk_recon.py` (v5.10 NEW) — **APK fast triage, pure standard
+  library**. Reads an APK as a zip and, in seconds, emits what to look at next
+  without a full decompile: a self-contained **binary AXML parser** for
+  `AndroidManifest.xml` producing the component matrix with export-risk
+  classification (`high` = exported without a custom permission / `info` =
+  protected / `unknown` = not declared), packer fingerprints from the hardening
+  `lib*.so` list, and masked secret plus endpoint triage (RFC1918 / localhost /
+  metadata addresses and high-value paths surfaced separately). Secrets are
+  masked by design. CLI: `<apk> [--json PATH] [--secrets] [--top N]`. Exit `0`
+  ok / `1` missing file or bad zip. Used at ACTIVE_RECON for mobile targets,
+  feeding `references/android_audit.md` and `references/apk_reversing.md`.
+
+**`AGENTS.md` (repo root, v5.7 NEW)** — the discipline layer. Ten execution
+disciplines, the coverage self-check template, the Level 1-7 escalation ladder
+(with "at least Level 4 before any 'no vulnerability' conclusion"), the
+cross-interface five questions, the six-question exploitability assessment,
+and the trigger→module routing table. Read it before the first probe of a
+session. It cannot widen anything in the safety model.
 
 ### references/
 
@@ -858,8 +1208,47 @@ Load into context as needed (do NOT load all at once).
   adaptive engine, heuristic decision rules (v2.2), and state recovery
   in plain language. Not a normative specification.
 - `references/tool_contracts.json` (v2.1 / v2.2 UPDATED) — Machine-readable
-  JSON Schema contracts for all 13 scripts + 4 tools (httpRequest/runShell/
-  browser/logger). Includes typed input/output/error schemas for every function.
+  JSON Schema contracts for the 13 v2-era core scripts + 4 tools
+  (httpRequest/runShell/browser/logger). Modules added after v2 (v3–v5.7) are
+  documented in `references/script_contracts.md` instead — read that file for
+  the authoritative contract of any newer module.
+- `references/business_logic_playbook.md` (v5.7 NEW) — Methodology manual for
+  `business_logic.py`: the five modelling questions, the three scenario attack
+  tables (payment / entitlement / flow), the decidable A/B standard for IDOR,
+  the three-part race-condition evidence standard, remediation sets, and the
+  P1-6 appendix on zero-identity surface recovery (four iron rules + response
+  fingerprint triage + crypto falsification).
+- `references/knowledge_domains_roadmap.md` (v5.7) — Domain expansion roadmap.
+  **All four planned domains have since landed (v5.8 → v5.11)** and every
+  deliverable this file named now exists in the repository; it remains as the
+  record of how each domain was scoped. The implemented behaviour lives in the
+  four handbooks below.
+- `references/ai_llm_security.md` (v5.8 NEW) — AI/LLM application security: the
+  five-layer attack surface (input / retrieval / orchestration / execution /
+  output), twelve detection classes each with construction, decision standard and
+  non-submittable counter-examples, the behaviour-diff methodology, reuse of the
+  existing landing layers (`oob_client.py`, command echo, `business_logic.py ab`),
+  the two new type gates, and the cleanup duty for poisoning tests.
+- `references/miniprogram_security.md` (v5.9 NEW) — Mini program security: the
+  four-stage chain (package recovery → decompilation → key/endpoint extraction →
+  authorisation verification), cloud development in three layers (database rules,
+  cloud functions, storage), login-chain (`code2session` / `session_key` /
+  phone-number decryption) and payment-chain weaknesses, and the rule that mini
+  program API IDOR keeps the same A/B bar as the web.
+- `references/android_audit.md` (v5.10 NEW) — Android component audit: the
+  exported × permission decision table, eleven detection classes with
+  copy-pasteable ADB commands, the no-Frida/no-root degraded verification path
+  (mandatory to document, never silently skipped), and the requirement that a
+  component finding carries both a reproducible command and a real effect.
+- `references/apk_reversing.md` (v5.10 NEW) — APK reversing: the
+  triage → packer identification → unpacking → full restore pipeline, the
+  hardening `lib*.so` fingerprint table, root and no-root unpacking strategies,
+  and artefact-handling rules (decompiled output is never committed or shared).
+- `references/pe_reversing.md` (v5.11 NEW) — Windows PE reversing: the PE
+  structure checklist (including TLS callbacks and section entropy), compiler and
+  packer fingerprints, isolated-VM dynamic analysis with anti-debug
+  identification, memory-corruption and DLL-hijacking location, and the rule that
+  a crash must be proven controllable before it counts as a finding.
 
 ### assets/
 
@@ -867,6 +1256,10 @@ Load into context as needed (do NOT load all at once).
   staging target.
 - `assets/example_trace.json` — Full state-machine execution trace.
 - `assets/example_report.json` — Expected `FinalOutput` for the sample input.
+- `assets/report_template.docx` (v5.6 NEW) — Submission-report template for
+  `report_docx.py`: Normal 微软雅黑 11pt, Heading 2 13pt bold, Heading 3 11pt
+  bold, all text forced to black (Word's theme blue removed). Regenerate with
+  `report_docx.py --emit-template`.
 
 ## Manifest
 

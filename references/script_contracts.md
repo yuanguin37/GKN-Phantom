@@ -454,3 +454,239 @@ hot paths. Deterministic and side-effect free; never touches the network.
 (body signatures, large responses), `js_analyzer` (all pattern dicts),
 `passive_recon._detect_tech_from_html`, `quick_combat._fingerprint_first`
 (SQLi error signatures).
+
+---
+
+## Memory layer (v5.6)
+
+### clueboard.py — cross-session clue board
+
+Target-level analyst memory. **Not** a replacement for `state.py`: state.py
+holds machine state (per RUN, JSON); clueboard holds judgement (per TARGET,
+Markdown). Deliverable file: `hunts/<slug>/CLUEBOARD.md`.
+
+- **`slugify(target: str) -> str`** — URL / host / IP / free name → safe
+  directory name (scheme, path, query, credentials and port are dropped).
+- **`blank_board(target, focus="", constraints=None) -> dict`** — empty model.
+- **`parse_board(text: str) -> dict`** / **`render_board(model: dict) -> str`**
+  — Markdown ⇄ model. Rendering is deterministic (same model → same bytes).
+- **`load_board(root, target) -> dict`** — raises `FileNotFoundError` when the
+  board does not exist.
+- **`save_board(root, target, model) -> str`** — atomic write (`.tmp` +
+  `os.replace`); refreshes `更新日`. Returns the board path.
+- **`add_row(root, target, section, cells, force=False) -> dict`**
+  - **Output**: `{"status": "added"|"duplicate"|"capped", "section",
+    "duplicate_of": int|None, "path", ...}`
+  - `"duplicate"` — an equivalent row exists (normalised equality, or mutual
+    substring with length ≥ 8). Nothing is written unless `force=True`, in
+    which case the first cell is prefixed `[重复] `.
+  - `"capped"` — `assumptions` already holds 5 rows. Only `--force` overrides.
+  - **Error states**: `ValueError` — unknown section, or an assumption whose
+    status is outside `假设 / 已证伪 / 已证实 / 待打`.
+- **`set_coverage(root, target, updates: dict) -> dict`** — replaces the listed
+  coverage lines. Values are `;`/`、`/`,`-separated lists; `失败升级已到`
+  holds a single `L<n>` value.
+- **`brief(model) -> str`** — token-cheap digest (focus, open assumptions +
+  how to falsify, excluded leads, todos, coverage). Use after context loss.
+- **`status(model, root, target) -> dict`** — counts per section,
+  `open_assumptions`, coverage map, `updated_at`.
+- **CLI**: `init | read | brief | add | cover | check | status | list`,
+  global `--root` (default `hunts`).
+- **Exit codes**: `0` success · `1` board exists / duplicate / capped /
+  `check` found a duplicate · `2` missing board or invalid argument.
+- **Sections**: `assumptions | hosts | paths | keys | excluded | secrets |
+  todos | coverage` (fixed columns; see `SECTION_META`).
+- **Boundary rule**: only judgements and provenance go on the board. Raw
+  material (full JS bundles, unmasked credentials) goes to
+  `hunts/<slug>/raw/`.
+
+---
+
+## Submission layer (v5.6)
+
+### report_docx.py — layered verification gate + DOCX builder
+
+Converts `validated` findings into the DOCX that SRC / CNVD / EDUSRC accept.
+Depends on the **optional** `python-docx`; when it is absent only
+`--gate-only` is available and the module says so (it never emits a fake
+DOCX).
+
+- **`verify_finding(finding: dict) -> dict`** — pure, never raises.
+  - **Output**: `{"id","type","severity","passed": bool, "hard": [...],
+    "quality": [...], "blocked_by": [gate names]}`
+  - Hard gates (all must pass — 缺一不报):
+    | Gate | Required evidence |
+    | --- | --- |
+    | 硬门0 先证伪 | `falsification` / `negative_control` present |
+    | 硬门1 PoC 可复现 | `evidence.request` + `evidence.response`, observable `evidence.tool` (not in `llm/static/scanner/nuclei/version/cve`), and ≥2 replays. Replay count is read from `evidence.replay_count` (canonical), falling back to `finding.replay_count` (legacy) then to `len(replay_results)`; it is coerced to int, so `"3"` passes. |
+    | 硬门2 危害为链路终局 | `impact` present, no "理论上/could be/疑似", `status == "validated"` |
+    | 硬门3 服务端边界确认 | `evidence.tool` or `evidence.status_code` present |
+    | 硬门4 类型命门 | see `TYPE_GATES` (IDOR → `ab_proof`; SQLi → `db_name`/`database_proof`; SSRF → `oob_callback`/`internal_echo`; upload → `execute_proof`/`getshell_proof`; RCE → `command_output`; data leak → `pii_fields`/`data_sample`; logic/race → `state_change_proof`) |
+    | 硬门5 链式追问到终局 | `chain_closed` / `exhausted` / `scope_note` |
+  - Quality items (advisory, never blocking): `cross_env`, `waf_note`.
+  - Gate/verification sub-objects are flattened first, so evidence may be
+    nested under `finding["gate"]` or `finding["verification"]`.
+- **`deai_scan(text) -> list[dict]`** — advisory wording violations
+  (template connectives, dash-trailing explanations, adjective hype,
+  screenshot meta-descriptions, hollow risk phrasing).
+- **`semantic_filename(finding) -> str`** —
+  `资产 存在{类型名}漏洞.docx`, sanitised for Windows.
+- **`emit_template(path) -> str`** — writes the DOCX template
+  (Normal 微软雅黑 11pt / Heading 2 13pt bold / Heading 3 11pt bold, all black).
+  Raises `ImportError` when python-docx is missing.
+- **`build_docx(finding, template, outpath, shots_dir, mode) -> dict`**
+  - **Output**: `{"path","steps","missing_shots":[...],"warnings":[...]}`
+  - `mode="src"` → fixed Heading-2 skeleton (漏洞名称 → 等级 → 类型 → 影响资产
+    → URL → 描述 → 〔测试账号与会话上下文〕 → 复现步骤 → 危害 → 修复建议).
+  - `mode="0day"` → generic-product skeleton (标题 → 发现时间 → 技术类型 →
+    描述 → 危害 → 厂商 → 受影响版本 → 互联网资产证明 → 1 技术细节 →
+    2 复现证明 → 3 修复方案 → 4 备注).
+  - Step spec: Heading 3 → note → `PoC:` mono block → `结果:` one line →
+    `截图(说明):` + embedded image + `图：<file>`. Screenshots are matched as
+    `step<N>_*.png|jpg|jpeg` in `shots_dir`; a missing one is reported in
+    `missing_shots` and written into the document as an explicit gap — never
+    skipped silently.
+  - **Error states**: raises `OSError` only if the output path is unwritable.
+- **`dup_warnings(outdir, finding) -> list[str]`** — four-way duplicate hint
+  (asset / root cause / endpoint / impact surface) run **before** the new file
+  lands in the directory.
+- **CLI**: `--emit-template` · `--findings <path|->` · `--gate-only` ·
+  `--mode src|0day|edu` · `--unit <name>` · `--shots <dir>` ·
+  `--outdir <dir>` (default `reports`) · `--min-severity low|medium|high|critical`
+  (default `medium`) · `--template <path>`.
+- **Output**: gate report JSON printed to stdout; when reports are built it is
+  additionally persisted to `<outdir>/_gate_report.json`.
+- **Exit codes**: `0` gate passed / reports written · `1` nothing passed the
+  gate, or `--gate-only` with no passing finding · `2` bad input ·
+  `3` python-docx missing.
+- **Directory layout**: `reports/0day/` · `reports/edu报告/` ·
+  `reports/<unit>src/`. Only final DOCX reports belong there.
+
+## Methodology layer (v5.7)
+
+### business_logic.py — business logic / authorization / race engine
+
+Turns the `logic_flaw` / `race_condition` / `mass_assignment` rules into a
+workflow: model → plan → prove → adjudicate. **Sends no traffic** — it emits
+plans, request pairs and verdicts only. Optional soft dependency on
+`clueboard.py` (`plan --board-root` writes back to the board; absence is not
+fatal). Requires nothing outside the standard library.
+
+- **`validate_model(model: dict) -> dict`** — pure, never raises.
+  - **Output**: `{"ok": bool, "errors": [...], "gaps": [...]}`
+  - `errors` = structural (non-empty `states`/`transitions`/`roles`; every
+    transition has `from`/`to`/`actor`/`endpoint`; `from`/`to` must exist in
+    `states`). **Model must be fixed before testing.**
+  - `gaps` = missing modelling question (no `guard` anywhere → 五问④ missing;
+    no `concurrency_notes` and no money/entitlement terminal state → 五问⑤
+    missing; `allowed: false` without `why_forbidden`; no `unit`).
+- **`build_plan(model: dict) -> dict`** — pure. Emits `assumptions` (one per
+  forbidden transition plus consistency gaps, each with "how to falsify"),
+  `state_tests` (`skip` / `replay` / `overwrite`), `role_matrix` (every
+  transition × every non-actor role → one counter-example pair), `ab_targets`,
+  `race_targets` (endpoint keywords: pay/order/refund/coupon/point/balance/
+  stock/claim/redeem/transfer/withdraw/sign/voucher/gift), `fixes`,
+  `gate_hints`.
+- **`render_plan_md(plan: dict) -> str`** — Markdown plan (8 sections).
+- **`make_ab(url, owner_token, attacker_token, method="GET", body="", headers=None) -> dict`**
+  — three raw-request blocks: `baseline` (A), `cross` (B), `unauth_control`
+  (no cookie) + `criteria`. The decidable IDOR standard lives here.
+- **`make_race(endpoint, replays=20, method="POST", body="", headers=None, authorized_rps=3) -> dict`**
+  — `xargs -P` / thread-pool / Turbo-Intruder skeletons. **`concurrency_recommended`
+  = min(authorized_rps, replays)**; the `-P` value in the skeleton is pre-clamped
+  to that, so the generated command cannot exceed the authorised rate by accident.
+- **`judge(evidence: dict) -> dict`** — pure, never raises.
+  - **Output**: `{"verdict","submission_type","gate_hint","reasons","warnings","suggested_severity","note"}`
+  - `verdict` ∈ `pass` / `fail` / `inconclusive`; `submission_type` aligns with
+    `report_docx.TYPE_LABELS`; `gate_hint` aligns with `report_docx.TYPE_GATES`.
+  - **A missing falsification/control record forces `inconclusive`** — the same
+    bar as 硬门0. Supported `kind`: `idor` · `race` · `logic` · `priv_esc` ·
+    `mass_assignment`.
+  - `idor`: baseline 200 + cross 200 + same resource → `pass`; cross 401/403 →
+    `fail` (falsified); unauth control also 200 → reclassified as
+    unauthenticated exposure (`info_leak`), not IDOR.
+  - `race`: `observed_success > expected_max_success` **and** `state_after`
+    present → `pass`; a missing `state_after` is a warning, not a pass blocker.
+- **`push_to_board(root, target, plan) -> dict`** — writes up to 5 assumptions
+  and up to 10 role-matrix todos; returns
+  `{"ok","added","duplicates","capped","board"}`. Never raises.
+- **CLI**: `model --file` · `plan --file [--out md] [--json] [--board-root R --target T]` ·
+  `ab --url --owner-token --attacker-token [--method] [--body] [--header "K: V"]` ·
+  `race --endpoint [--replays N] [--method] [--body] [--header] [--authorized-rps R]` ·
+  `judge --file` · `scene [--name payment|entitlement|flow] [--json]` ·
+  `fix --type idor|logic_flaw|race_condition|priv_esc|mass_assignment`.
+- **Exit codes**: `model` `0` valid / `1` errors · `plan` `0` valid model /
+  `1` model has errors (the plan is still printed) · `judge` `0` pass / `1` fail /
+  `2` inconclusive · `2` bad input.
+- **Integration**: ACTIVE_TESTING uses `plan` / `ab` / `race`; VALIDATION uses
+  `judge`; a `pass` is a *precondition* for `report_docx.verify_finding`, never a
+  substitute for it.
+
+---
+
+## Knowledge domain layers (v5.8–v5.11)
+
+Four domains beyond the web, each shipped as **handbook + rule file + type
+gates**. No new scan engine is introduced: every domain reuses the existing
+evidence, adjudication and delivery layers, so the pass bar stays identical.
+
+| Version | Domain | Handbook | Rules | Type gates added |
+|---|---|---|---|---|
+| v5.8.0 | AI / LLM application | `references/ai_llm_security.md` | `rules/ai_llm_security.yaml` (11) | `prompt_injection`, `agent_tool_abuse` |
+| v5.9.0 | Mini program | `references/miniprogram_security.md` | `rules/miniprogram_security.yaml` (8) | `hardcoded_secret`, `mp_api_idor`, `cloud_db_exposure`, `cloud_function_abuse`, `mp_login_logic`, `mp_payment_logic`, `mp_render_injection` |
+| v5.10.0 | Android / APK | `references/android_audit.md`, `references/apk_reversing.md` | `rules/android_security.yaml` (7) | `android_component_exposure`, `android_webview_bridge`, `android_provider_exposure`, `android_intent_redirect`, `android_binder_privilege`, `android_pendingintent_hijack`, `android_deeplink_hijack` |
+| v5.11.0 | Windows PE | `references/pe_reversing.md` | `rules/pe_security.yaml` (4) | `memory_corruption`, `format_string`, `dll_hijacking`, `missing_mitigation` |
+
+**Cross-domain grading rules** (do not relax these):
+
+- **Injection is judged by behaviour, not by wording.** `prompt_injection`
+  requires a behaviour delta reproduced at least three times plus a control
+  request whose output differs.
+- **Tool abuse requires landed evidence.** `agent_tool_abuse` needs a command
+  echo, internal response body, real OOB callback or file content. A model
+  claiming it executed something is never evidence.
+- **A mini program API is still HTTP.** `mp_api_idor` uses the same three-request
+  A/B cross-proof shape as the web `idor` gate.
+- **An exported component is not a finding.** `android_component_exposure`
+  requires a copy-pasteable ADB command plus a real effect.
+- **A crash is not a finding until it is controllable.** `memory_corruption`
+  requires evidence that EIP/RIP is input-controlled; a hijack requires proof
+  the test DLL was loaded and executed.
+
+### apk_recon.py — APK fast triage (v5.10)
+
+Pure standard library (no jadx / apktool / pip). Reads an APK as a zip and, in
+seconds, emits the component matrix, hardening fingerprints and secret/endpoint
+triage — so a large package does not need a full decompile before you know where
+to look. Includes a self-contained binary-AXML parser for `AndroidManifest.xml`.
+
+- **`parse_axml(data: bytes) -> list[dict]`** — parses the binary
+  `AndroidManifest.xml` chunk stream. Returns a flat list of `{"tag", "attrs"}`.
+  Attribute names are resolved through the ResourceMap chunk when present
+  (`android:exported` etc.), falling back to the string pool (which is what
+  aapt usually leaves in place for named attributes). Raises `ValueError` on a
+  non-AXML magic.
+- **`classify_components(elements: list) -> dict`** — pure. Returns
+  `package` / `versionName` / `minSdk` / `targetSdk` / `permissions` /
+  `application{debuggable,allowBackup,usesCleartextTraffic,networkSecurityConfig}` /
+  `components[{kind,name,exported,permission,authorities,grantUriPermissions,process,risk}]`.
+  `risk`: `high` = `exported=true` with no custom permission · `info` = protected ·
+  `unknown` = `exported` not declared (the pre-Android-12 default-export
+  semantics; requires human confirmation).
+- **`scan_apk(path: str, top_urls: int = 15) -> dict`** — full triage. Also
+  returns `dex_files`, `native_libs`, `hardening_suspects` (matching the
+  hardening `lib*.so` fingerprint list), `secrets` (**masked**), and
+  `endpoints{total,internal,interesting,sample}` — internal addresses
+  (RFC1918 / localhost / 169.254.169.254) and high-value paths are surfaced
+  separately.
+- **`render(report: dict, show_secrets: bool = False) -> str`** — human-readable
+  summary with the next-step pointers to `android_audit.md` / `apk_reversing.md`.
+- **CLI**: `apk_recon.py <apk> [--json PATH] [--secrets] [--top N]`.
+- **Exit codes**: `0` ok · `1` file missing or not a valid zip.
+- **Compliance**: analyse only self-owned or written-authorized APKs. Secrets are
+  masked in output by design; raw material belongs in `hunts/<target>/raw/`,
+  which is never shared.
+- **Integration**: run first at ACTIVE_RECON for mobile targets, then chain
+  component findings into `android_audit.md` ADB verification, and endpoint/key
+  hits into `business_logic.py ab` / plain HTTP requests.
+

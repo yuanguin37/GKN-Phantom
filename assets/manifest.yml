@@ -1,18 +1,52 @@
 name: gkn-phantom
 display_name: GKN-Phantom
-version: 5.5.0
+version: 5.11.0
 category: security
 runtime: openclaw-agent
 requires_auth: true
 safe_mode_default: true
 description: >-
   Automated, authorized penetration testing and security validation for
-  staging/dev/internal/lab environments. v5.5.0 adds the pattern matching
+  staging/dev/internal/lab environments. v5.7.0 adds three layers: the
+  discipline layer (AGENTS.md — ten execution disciplines, coverage self-check,
+  the Level 1-7 escalation ladder with "no 'no vulnerability' conclusion before
+  Level 4", the cross-interface five questions and the six-question
+  exploitability assessment); the business-logic methodology layer
+  (scripts/business_logic.py — five-question state-machine modelling, role
+  matrix, A/B cross-proof for IDOR, rate-bounded race replay planning, and
+  evidence adjudication whose pass bar matches the report gate); and a
+  trigger-to-module routing table with Chinese trigger phrases and a
+  conclusion-first output skeleton. v5.8.0-v5.11.0 extend coverage beyond the
+  web into four knowledge domains, each as handbook + rule file + type gates:
+  AI/LLM application security (rules/ai_llm_security.yaml,
+  references/ai_llm_security.md) where prompt injection is judged by a
+  behaviour delta reproduced at least three times against a control request and
+  agent tool abuse requires landed evidence (a model claiming execution is
+  never evidence); mini program security
+  (rules/miniprogram_security.yaml, references/miniprogram_security.md) with
+  package recovery, decompilation, key/endpoint extraction and cloud
+  development authorisation bypass, keeping the same A/B cross-proof bar for
+  API IDOR as the web; Android component auditing plus APK reversing
+  (scripts/apk_recon.py — a pure-standard-library binary AXML parser producing
+  a component matrix with export-risk classification, hardening fingerprints
+  and secret/endpoint triage in seconds — plus references/android_audit.md and
+  references/apk_reversing.md with a no-Frida/no-root degraded path); and
+  Windows PE reversing (rules/pe_security.yaml, references/pe_reversing.md)
+  where a crash must be proven controllable and a hijack must be proven loaded.
+  v5.6.0 adds the submission and memory
+  layers: a cross-session clue board (scripts/clueboard.py, one Markdown board
+  per target at hunts/<target>/CLUEBOARD.md holding open assumptions, falsified
+  leads, recovered keys and coverage, so judgement survives context compression)
+  and a submission layer (scripts/report_docx.py: layered verification gate with
+  six hard gates + per-type key gates, then SRC/CNVD-ready DOCX with Step-style
+  PoC, mandatory real screenshots, semantic filenames and a de-AI wording scan).
+  v5.5.0 adds the pattern matching
   engine (pattern_matcher.py): Trie + Aho-Corasick multi-literal matching
   with sound regex required-literal prefiltering for tech fingerprinting,
   WAF detection, JS secret/sink scanning, DB error fingerprinting, and HTML
-  tech detection — provably identical results, 3-15x faster on large
-  response bodies. v5.0.0 adds interactive browser agent
+  tech detection — provably identical results; the prefilter gate pays off as
+  pattern count and response-body size grow, while small pattern sets on short
+  bodies fall back to naive evaluation (faster there). v5.0.0 adds interactive browser agent
   (Playwright), HTML/PDF visualization reports, YAML rule configuration with
   hot-reload, professional PoC generator, upgrading to 30 modules from
   19. Retains v4.0.0: 7 specialized recon/testing modules (passive
@@ -111,6 +145,92 @@ state_recovery:               # v2.1 NEW
   retry_backoff_ms: [500, 1000, 2000]
   partial_resume_states: [ACTIVE_TESTING, VALIDATION]
   rollback_safe_states: [INIT, SCOPE_CHECK, PRE_FLIGHT, RECONNAISSANCE]
+memory_layer:                 # v5.6 NEW — cross-session analyst memory
+  module: scripts/clueboard.py
+  root: hunts
+  board_pattern: hunts/<target>/CLUEBOARD.md
+  raw_material: hunts/<target>/raw/
+  open_assumption_cap: 5
+  assumption_states: [假设, 已证伪, 已证实, 待打]
+  duplicate_policy: refuse_and_mark      # [重复] prefix, never grow the board
+  read_on_resume: true                   # `brief` before touching a known target
+submission_layer:             # v5.6 NEW — verification gate + DOCX delivery
+  module: scripts/report_docx.py
+  template: assets/report_template.docx
+  output_root: reports
+  modes: [src, 0day, edu]
+  default_min_severity: medium
+  hard_gates:
+    - 先证伪（否定实验）
+    - PoC 可复现（原始请求块 + 重放 >= 2）
+    - 危害为链路终局（无“理论上”措辞）
+    - 服务端/权限边界确认
+    - 类型命门（按漏洞类型的关键证据）
+    - 链式追问到终局
+  screenshot_policy: real_screenshots_mandatory
+  filename_pattern: "{asset} 存在{type_label}漏洞.docx"
+  deai_scan: true
+  optional_dependency: python-docx
+discipline_layer:              # v5.7 NEW — how it must be done, not what it does
+  charter: AGENTS.md
+  read_before_first_probe: true
+  cannot_widen_safety_model: true     # AGENTS.md may never relax scope/risk/rate
+  disciplines: 10
+  coverage_selfcheck: [已测, 未测, 变种, 关联]
+  escalation_ladder:
+    levels: 7
+    min_level_before_negative_conclusion: 4   # L1-L3 failure != "no vulnerability"
+  cross_interface_questions: [信息流, 凭证, 状态, 权限, 时序]
+  exploitability_questions: 6
+  pause_triggers: [加密签名, 权限不明, 连续3次失败, 新攻击面, 复杂业务]
+  open_assumption_cap: 5              # shared with memory_layer
+methodology_layer:             # v5.7 NEW — business logic / authz / race
+  module: scripts/business_logic.py
+  playbook: references/business_logic_playbook.md
+  sends_traffic: false                # plans and adjudicates only
+  subcommands: [model, plan, ab, race, judge, scene, fix]
+  scenarios: [payment, entitlement, flow]
+  idor_standard: "A's resource must be readable with B's credential"
+  race_standard: "success_count > allowed AND state_delta AND serial_control"
+  verdicts: [pass, fail, inconclusive]      # exit codes 0 / 1 / 2
+  aligned_with: submission_layer.hard_gates   # judge refuses pass without falsification
+  board_push: true                     # plan --board-root writes assumptions + todos
+knowledge_domains:             # v5.8-v5.11 NEW — handbook + rules + gates per domain
+  - domain: ai_llm
+    version: 5.8.0
+    handbook: references/ai_llm_security.md
+    rules: rules/ai_llm_security.yaml
+    rule_count: 11
+    type_gates: [prompt_injection, agent_tool_abuse]
+    gate_bar: "injection = behaviour delta x3 vs control; tool abuse = landed evidence only"
+    compliance: self_owned_or_written_authorized
+  - domain: miniprogram
+    version: 5.9.0
+    handbook: references/miniprogram_security.md
+    rules: rules/miniprogram_security.yaml
+    rule_count: 8
+    type_gates: [hardcoded_secret, mp_api_idor, cloud_db_exposure, cloud_function_abuse, mp_login_logic, mp_payment_logic, mp_render_injection]
+    idor_bar: shared_with_web           # same A/B cross-proof as the web idor gate
+    compliance: cloud_tests_read_only_and_row_limited
+  - domain: android
+    version: 5.10.0
+    handbooks: [references/android_audit.md, references/apk_reversing.md]
+    rules: rules/android_security.yaml
+    rule_count: 7
+    triage: scripts/apk_recon.py        # pure stdlib, seconds, binary AXML parser
+    type_gates: [android_component_exposure, android_webview_bridge, android_provider_exposure, android_intent_redirect, android_binder_privilege, android_pendingintent_hijack, android_deeplink_hijack]
+    degraded_path_required: true        # no-Frida / no-root must be documented
+    compliance: self_owned_apps_only
+  - domain: windows_pe
+    version: 5.11.0
+    handbook: references/pe_reversing.md
+    rules: rules/pe_security.yaml
+    rule_count: 4
+    type_gates: [memory_corruption, format_string, dll_hijacking, missing_mitigation]
+    dynamic_analysis_isolation: mandatory
+    compliance: self_owned_or_authorized_samples_or_public_ranges
+roadmap_ref: references/knowledge_domains_roadmap.md  # v5.7 roadmap; all four domains landed in v5.8-v5.11
+routing_table_ref: SKILL.md#trigger--module-routing-v57
 formal_algorithms_ref: references/formal_algorithms.md  # v2.2: documentation only
 tool_contracts_ref: references/tool_contracts.json
 disclaimer: >-

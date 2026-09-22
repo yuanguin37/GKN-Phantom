@@ -1,0 +1,176 @@
+# GKN-Phantom v5.11 — Windows PE Security Detection Rules
+# ========================================================
+# Covers native binary weaknesses: memory corruption (stack/heap overflow,
+# UAF, integer overflow), format strings, DLL hijacking and missing PE
+# exploit mitigations.
+#
+# Companion handbook: references/pe_reversing.md
+#
+# AUTHORIZED TESTING ONLY. Self-owned software, written-authorized samples, or
+# public training ranges. All dynamic analysis happens in an isolated,
+# snapshot-recoverable VM. Never replace DLLs in the system directory.
+#
+# Total: 4 rules
+
+- id: "pe-memory-corruption"
+  type: "memory_corruption"
+  severity: "critical"
+  tier: "critical"
+  risk_level: "L4"
+  target_param_hints:
+    - "<command-line argument / file input / network field feeding a memcpy>"
+    - "<parser entry point>"
+  probe_description: >-
+    Feed an over-long or malformed input to the identified copy path
+    (strcpy/sprintf/memcpy into a stack or heap buffer, or a length computed
+    from input) and observe whether the process crashes, then determine whether
+    the instruction pointer is attacker-controlled.
+  detection_signal: >-
+    A reproducible crash with evidence that the execution flow is controllable
+    (EIP/RIP overwritten by the input, or a controllable indirect call).
+    A crash alone, without control, is a lead.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Memory corruption. Remediation: (1) Replace unbounded copies
+    (strcpy/strcat/sprintf/gets/memcpy) with bounded, size-aware variants
+    (strcpy_s/strncpy_s/snprintf_s/memcpy_s) and validate the length before
+    the copy; (2) compute buffer sizes with overflow-checked arithmetic — on
+    Windows use size_t with explicit checks or the SafeInt library;
+    (3) enable and fix /GS, /DYNAMICBASE, /NXCOMPAT, /guard:cf and /sdl —
+    recompiling with mitigations raises the exploitation bar substantially;
+    (4) avoid freeing objects that are still referenced; null out pointers and
+    use RAII/smart pointers for lifetime management; (5) fuzz the parser as
+    part of CI with a libFuzzer/AFL harness; (6) validate all lengths and
+    offsets from parsed input before use.
+  cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+  references:
+    - "https://cwe.mitre.org/data/definitions/121.html"
+    - "https://cwe.mitre.org/data/definitions/416.html"
+    - "https://cwe.mitre.org/data/definitions/190.html"
+  tags:
+    - "pe"
+    - "critical"
+    - "memory-corruption"
+    - "l4"
+    - "crash-and-control-required"
+
+- id: "pe-format-string"
+  type: "format_string"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<argument or field passed as the format argument>"
+  probe_description: >-
+    Locate printf/syslog-family calls whose FIRST argument is user-controlled,
+    then feed %x/%p/%s specifiers and observe stack disclosure; where a write
+    specifier (%n) is reachable, assess whether a targeted overwrite is possible.
+  detection_signal: >-
+    Stack data is disclosed in the output for %x/%p probes, or a controlled
+    write is demonstrated via %n.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    Uncontrolled format string. Remediation: (1) Never pass user input as the
+    format argument — use a fixed literal format and pass data as arguments
+    (printf("%s", user_input)); (2) enable the compiler's format-security
+    warnings (/W4 with /analyze, or -Wformat -Wformat-security) and treat them
+    as errors; (3) disable or guard %n in any wrapper around the printf family;
+    (4) review logging helpers that build a format string dynamically;
+    (5) run the binary with a hardened CRT that rejects %n in untrusted
+    format strings where available.
+  cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/134.html"
+    - "https://cwe.mitre.org/data/definitions/787.html"
+  tags:
+    - "pe"
+    - "high"
+    - "format-string"
+    - "leak-or-write-required"
+
+- id: "pe-dll-hijacking"
+  type: "dll_hijacking"
+  severity: "high"
+  tier: "high"
+  risk_level: "L3"
+  target_param_hints:
+    - "<imported DLL without an absolute path>"
+    - "<application directory writable by a low-privilege user>"
+  probe_description: >-
+    List the imports and identify DLLs loaded without an absolute path that are
+    not KnownDLLs. Confirm with Process Monitor (Result = NAME NOT FOUND, Path
+    ends with .dll), then place a benign test DLL of the same name earlier in
+    the search order and observe whether it is loaded and executed.
+  detection_signal: >-
+    The test DLL is loaded and its code runs (a visible marker is sufficient).
+    Report whether this is a hijack, a search-order hijack or a phantom-DLL case.
+  safe_poc: false
+  requires_credentials: false
+  requires_human_approval: true
+  blocked_in_safe_mode: true
+  remediation: >-
+    DLL hijacking / search-order hijacking / phantom DLL. Remediation:
+    (1) Load dependencies with an absolute, trusted path or with
+    LoadLibraryEx and LOAD_LIBRARY_SEARCH_SYSTEM32 where the DLL is a system
+    library; (2) call SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 |
+    LOAD_LIBRARY_SEARCH_USER_DIRS) and AddDllDirectory for application-local
+    libraries; (3) do not rely on the current directory or PATH being searched;
+    (4) install the application into a directory writable only by
+    administrators; (5) remove unnecessary imports and validate that every
+    referenced DLL exists at install time; (6) apply the same rules to services,
+    scheduled tasks and installers, which are the highest-value hijack targets.
+  cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
+  references:
+    - "https://cwe.mitre.org/data/definitions/427.html"
+    - "https://cwe.mitre.org/data/definitions/426.html"
+  tags:
+    - "pe"
+    - "high"
+    - "dll-hijacking"
+    - "load-proof-required"
+
+- id: "pe-missing-mitigations"
+  type: "missing_mitigation"
+  severity: "medium"
+  tier: "medium"
+  risk_level: "L1"
+  target_param_hints:
+    - "DllCharacteristics"
+    - "<PE optional header>"
+  probe_description: >-
+    Inspect DllCharacteristics and the presence of stack cookies: check
+    DYNAMICBASE (ASLR), NXCOMPAT (DEP), GUARD_CF (CFG), HIGH_ENTROPY_VA and
+    /GS, plus SAFESEH and .reloc presence.
+  detection_signal: >-
+    One or more mitigations are absent, demonstrated with pestudio/dumpbin
+    output. This is a weakness, not a vulnerability on its own — pair it with a
+    memory-corruption finding before claiming impact.
+  safe_poc: true
+  requires_credentials: false
+  requires_human_approval: false
+  blocked_in_safe_mode: false
+  remediation: >-
+    Exploit mitigations not enabled. This amplifies any memory-corruption bug,
+    so enable them for every shipped binary: (1) /DYNAMICBASE and /HIGHENTROPYVA
+    (ASLR), /NXCOMPAT (DEP), /GS (stack cookies), /guard:cf (control flow
+    guard), /SAFESEH, /sdl; (2) ensure the linker emits a .reloc section so
+    ASLR can actually be applied; (3) do not strip the security cookie; keep
+    mitigations on for release builds, not just debug; (4) verify the final
+    binaries with pestudio as part of the release checklist — the build system
+    often overrides project settings; (5) apply the same policy to third-party
+    components and reject those without mitigations during procurement.
+  cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
+  references:
+    - "https://cwe.mitre.org/data/definitions/693.html"
+    - "https://cwe.mitre.org/data/definitions/119.html"
+  tags:
+    - "pe"
+    - "medium"
+    - "mitigations"
+    - "amplifier-only"

@@ -14,3 +14,9 @@ combat_*/
 
 # State-machine runtime checkpoints
 runs/
+
+# v5.6 — clue board runtime (per-target analyst memory; local by nature)
+hunts/
+
+# v5.6 — submission reports (per-unit DOCX + _gate_report.json)
+reports/
