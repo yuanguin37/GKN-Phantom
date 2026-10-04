@@ -40,11 +40,13 @@ Section keys: assumptions | hosts | paths | keys | excluded | secrets | todos | 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
 import re
 import sys
+import time
 
 # ---- Section schema ---------------------------------------------------------
 # Fixed order + fixed columns keep `read` / `brief` output stable so it can be
@@ -134,7 +136,10 @@ def _dup_index(rows: list, text: str) -> int | None:
         existing = norm(row[0] if isinstance(row, list) else row)
         if existing == key:
             return i
-        if len(key) >= 8 and (key in existing or existing in key):
+        # Bidirectional containment; the length gate applies to the LONGER
+        # of the two so a short existing line still matches a longer
+        # re-recording of the same lead (with extra query params etc.).
+        if max(len(key), len(existing)) >= 8 and (key in existing or existing in key):
             return i
     return None
 
@@ -251,7 +256,12 @@ def load_board(root: str, target: str) -> dict:
 
 
 def save_board(root: str, target: str, model: dict) -> str:
-    """Atomic write (tmp + replace) so a crash never leaves a half board."""
+    """Atomic write (tmp + replace) so a crash never leaves a half board.
+
+    NOTE: atomic single writes do NOT make read-modify-write safe. Mutating
+    commands (add/cover) must hold _board_lock() across load→modify→save,
+    otherwise two concurrent sessions lose each other's rows.
+    """
     model["meta"]["更新日"] = _today()
     path = board_path(root, target)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -262,65 +272,130 @@ def save_board(root: str, target: str, model: dict) -> str:
     return path
 
 
+@contextlib.contextmanager
+def _board_lock(path: str, timeout: float = 10.0):
+    """Cross-platform advisory lock over the board (sidecar .lock file).
+
+    The whole load→modify→save critical section must run inside this lock,
+    so two agent sessions appending rows never lose an update.
+    """
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    fh = open(lock_path, "a+")
+    locked = False
+    try:
+        deadline = time.time() + timeout
+        while True:
+            try:
+                fh.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    raise TimeoutError(f"clue board is locked by another process: {lock_path}")
+                time.sleep(0.05)
+        yield
+    finally:
+        if locked:
+            try:
+                fh.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fh.close()
+
+
+def _open_assumption_count(rows: list) -> int:
+    """Assumptions whose state is still 假设 (the cap counts ONLY these)."""
+    return sum(1 for r in rows if len(r) > 1 and r[1] == "假设")
+
+
 # ---- Specialised writers ---------------------------------------------------
 def add_row(root: str, target: str, section: str, cells: list, force: bool = False) -> dict:
-    """Append one row/item. Returns {status, path, duplicate_of, section}."""
+    """Append one row/item. Returns {status, path, duplicate_of, section}.
+
+    The load→modify→save critical section runs under the board lock, so
+    concurrent sessions (the whole point of a cross-session board) can no
+    longer lose each other's rows.
+    """
     if section not in SECTION_META:
         raise ValueError(f"unknown section '{section}'; valid: {', '.join(SECTION_ORDER)}")
-    model = load_board(root, target)
-    title, cols, kind = SECTION_META[section]
-    text = cells[0] if cells else ""
-
-    if kind == "table":
-        expected = len(cols)
-        cells = (list(cells) + [""] * expected)[:expected]
-        if section == "assumptions":
-            state = cells[1] or "假设"
-            if state not in ASSUMPTION_STATES:
-                raise ValueError(f"assumption status must be one of {ASSUMPTION_STATES}")
-            cells[1] = state
-    elif kind == "coverage":
+    if section == "coverage":
         raise ValueError("coverage is written via `cover`, not `add`")
+    path = board_path(root, target)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"no clue board for '{target}' at {path}; run `init` first")
+    with _board_lock(path):
+        model = load_board(root, target)
+        title, cols, kind = SECTION_META[section]
+        text = cells[0] if cells else ""
 
-    rows = model["sections"][section]
-    dup = _dup_index(rows, text)
-    result = {"status": "added", "section": section, "duplicate_of": None}
+        if kind == "table":
+            expected = len(cols)
+            cells = (list(cells) + [""] * expected)[:expected]
+            if section == "assumptions":
+                state = cells[1] or "假设"
+                if state not in ASSUMPTION_STATES:
+                    raise ValueError(f"assumption status must be one of {ASSUMPTION_STATES}")
+                cells[1] = state
 
-    if dup is not None:
-        result["duplicate_of"] = dup
-        if not force:
-            # Record the hit but do not grow the board — the whole point is to
-            # stop re-testing leads that are already on it.
-            result["status"] = "duplicate"
-            result["existing"] = rows[dup]
+        rows = model["sections"][section]
+        dup = _dup_index(rows, text)
+        result = {"status": "added", "section": section, "duplicate_of": None}
+
+        if dup is not None:
+            result["duplicate_of"] = dup
+            if not force:
+                # Record the hit but do not grow the board — the whole point is to
+                # stop re-testing leads that are already on it.
+                result["status"] = "duplicate"
+                result["existing"] = rows[dup]
+                return result
+
+        if section == "assumptions" and _open_assumption_count(rows) >= 5 and not force:
+            # Cap counts OPEN assumptions only — closing (已证伪/已证实) one
+            # genuinely frees a slot, which is what AGENTS.md asks for.
+            result["status"] = "capped"
+            result["reason"] = ("5 open assumptions already on the board; "
+                                "falsify/close one first (or pass --force)")
             return result
 
-    if section == "assumptions" and len(rows) >= 5 and not force:
-        result["status"] = "capped"
-        result["reason"] = "assumptions capped at 5; falsify/close one first (or pass --force)"
-        return result
+        if dup is not None:
+            cells = [f"[重复] {cells[0]}"] + list(cells[1:]) if kind == "table" else [f"[重复] {text}"]
 
-    if dup is not None:
-        cells = [f"[重复] {cells[0]}"] + list(cells[1:]) if kind == "table" else [f"[重复] {text}"]
-
-    model["sections"][section].append(cells if kind == "table" else cells[0])
-    result["path"] = save_board(root, target, model)
+        model["sections"][section].append(cells if kind == "table" else cells[0])
+        result["path"] = save_board(root, target, model)
     return result
 
 
 def set_coverage(root: str, target: str, updates: dict) -> dict:
     """Replace the listed coverage lines (values are ';'-separated lists)."""
-    model = load_board(root, target)
-    applied = {}
-    for k, v in updates.items():
-        if v is None:
-            continue
-        if k not in COVERAGE_KEYS:
-            raise ValueError(f"unknown coverage key '{k}'; valid: {', '.join(COVERAGE_KEYS)}")
-        items = [s.strip() for s in LIST_SEP.split(v) if s.strip()] if v else []
-        model["coverage"][k] = items
-        applied[k] = items
-    return {"status": "updated", "path": save_board(root, target, model), "coverage": applied}
+    path = board_path(root, target)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"no clue board for '{target}' at {path}; run `init` first")
+    with _board_lock(path):
+        model = load_board(root, target)
+        applied = {}
+        for k, v in updates.items():
+            if v is None:
+                continue
+            if k not in COVERAGE_KEYS:
+                raise ValueError(f"unknown coverage key '{k}'; valid: {', '.join(COVERAGE_KEYS)}")
+            items = [s.strip() for s in LIST_SEP.split(v) if s.strip()] if v else []
+            model["coverage"][k] = items
+            applied[k] = items
+        return {"status": "updated", "path": save_board(root, target, model), "coverage": applied}
 
 
 def brief(model: dict) -> str:
@@ -458,8 +533,19 @@ def main(argv: list | None = None) -> int:
             print(json.dumps(status(model, root, args.target), ensure_ascii=False, indent=2))
             return 0
         if args.cmd == "check":
-            rows = model["coverage"].get(args.section) if args.section == "coverage" \
-                else model["sections"][args.section]
+            if args.section == "coverage":
+                # Coverage is a dict of lists, not one section: search EVERY
+                # coverage key (the old code looked up the nonexistent key
+                # "coverage" and always returned rc=0).
+                hit = None
+                for key in COVERAGE_KEYS:
+                    idx = _dup_index(model["coverage"].get(key) or [], args.text)
+                    if idx is not None:
+                        hit = {"duplicate": True, "coverage_key": key, "index": idx}
+                        break
+                print(json.dumps(hit or {"duplicate": False}, ensure_ascii=False))
+                return 1 if hit else 0
+            rows = model["sections"][args.section]
             idx = _dup_index(rows or [], args.text)
             print(json.dumps({"duplicate": idx is not None, "index": idx}, ensure_ascii=False))
             return 1 if idx is not None else 0

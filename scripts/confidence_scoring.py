@@ -125,16 +125,25 @@ def score_evidence_strength(finding: dict) -> float:
 def score_reproducibility(finding: dict) -> float:
     """Score what fraction of replays matched the detection signal.
 
-    If replay_results are present, compute match_rate = matched / total.
-    If no replays yet (candidate finding), return 0.0 (not yet reproduced).
-    If reproducible=True with no replay data, return 0.5 (single confirmation).
+    ONLY validator-issued replays count: perform_replay() stamps every
+    replay with a `response_hash`. A caller can still self-attest
+    `replay_results: [{"signal_matched": true}, ...]` in the finding JSON —
+    self-attested replays (no response_hash) score 0.0, so the aggregate
+    cannot cross the promotion threshold on forged input.
+
+    Non-dict replay entries are ignored (never crash).
     """
     replay_results = finding.get("replay_results", [])
     replay_count = finding.get("replay_count", 0)
 
-    if replay_results:
-        matched = sum(1 for r in replay_results if r.get("signal_matched"))
-        return matched / len(replay_results)
+    if isinstance(replay_results, list) and replay_results:
+        dict_replays = [r for r in replay_results if isinstance(r, dict)]
+        trusted = [r for r in dict_replays if r.get("response_hash")]
+        if not trusted:
+            # replay data exists but none of it is validator-issued
+            return 0.0
+        matched = sum(1 for r in trusted if r.get("signal_matched"))
+        return matched / len(trusted)
 
     if replay_count > 0:
         # replay_count set but no detail — assume all matched if reproducible
@@ -179,10 +188,14 @@ def score_corroboration(finding: dict) -> float:
     """
     score = 0.0
 
-    # Multiple replays all matched
+    # Multiple replays all matched (validator-issued only — see
+    # score_reproducibility; self-attested replays don't corroborate)
     replay_results = finding.get("replay_results", [])
-    if len(replay_results) >= 2 and all(r.get("signal_matched") for r in replay_results):
-        score += 0.4
+    if isinstance(replay_results, list):
+        trusted = [r for r in replay_results
+                   if isinstance(r, dict) and r.get("response_hash")]
+        if len(trusted) >= 2 and all(r.get("signal_matched") for r in trusted):
+            score += 0.4
 
     # Adaptive metadata: alternative signals tried
     adaptive = finding.get("adaptive_metadata", {})

@@ -158,7 +158,39 @@ TYPE_GATES = {
                       "测试 DLL 被加载并执行（并注明 劫持/搜索顺序/Phantom 哪一种）"),
     "missing_mitigation": (["mitigation_absent_proof"],
                            "以 dumpbin/pestudio 输出证明 ASLR/DEP/CFG/GS 缺失"),
+    # ---- v5.12 补齐：此前这 23 个类型无命门定义（未知类型现在默认拒绝） ----
+    "xss": (["execute_proof"], "浏览器内真实执行（弹窗/console/读到 cookie），仅反射回显不算"),
+    "csrf": (["state_change_proof", "no_token_proof"], "目标功能无 CSRF 防护且跨站请求真实生效（状态被改）"),
+    "path_traversal": (["file_content_proof"], "读到目标文件内容（/etc/passwd 等真实字节），仅报错不算"),
+    "ssti": (["arithmetic_diff", "command_output"], "算术差分（7*7→49 且对照 7*8→56）或命令执行回显"),
+    "info_leak": (["data_sample"], "泄露内容的真实样本（非占位/非空），并指出其中的敏感字段"),
+    "misconfig": (["exposure_proof", "impact_proof"], "暴露面可访问 + 实际危害（配置/凭据泄露或可操作面板）"),
+    "component_exposure": (["exposure_proof", "impact_proof"], "组件未授权可访问 + 实际危害（读到数据/执行操作）"),
+    "cors_misconfig": (["cross_origin_read_proof"], "跨域真实读到带敏感数据的响应（ACAO 反射/带凭据证明）"),
+    "deserialization": (["command_output", "oob_callback"], "反序列化落地：命令回显或 OOB 回调；仅报错/理论链不算"),
+    "graphql_injection": (["introspection_proof", "data_sample"], "introspection/注入拿到真实数据样本"),
+    "nosql_injection": (["data_sample", "auth_bypass_proof"], "注入返回他人数据或绕过认证的真实结果"),
+    "open_redirect": (["redirect_proof"], "Location 实际跳到外部可控地址（地址栏/抓包证明）"),
+    "prototype_pollution": (["pollution_proof", "impact_proof"], "污染真实生效（对象被改写）+ 实际危害（XSS/RCE/绕过）"),
+    "mass_assignment": (["state_change_proof", "ab_proof"], "注入字段真实生效（角色/权限被改）+ A/B 交叉证明"),
+    "http_smuggling": (["desync_proof"], "真实 desync 证明（前后端响应不一致/毒化缓存命中）"),
+    "xxe": (["file_content_proof", "oob_callback"], "读到文件内容或 OOB 回调；仅解析错误不算"),
+    "jwt_deep_analysis": (["forged_token_proof"], "伪造 token 被服务端接受（none/弱密钥/算法混淆）"),
+    "priv_esc": (["priv_escalation_proof"], "低权账号实际获得高权能力（新角色生效/越权操作成功）"),
+    "weak_credential": (["login_success_proof"], "用该凭据实际登录成功并进入授权后页面/接口"),
+    "jailbreak": (["behavior_delta_proof", "stable_repro_proof"], "与提示词注入同标准：行为差分 + 稳定复现"),
+    "llm_output_xss": (["execute_proof"], "渲染端浏览器内真实执行；仅输出原始标签不算"),
+    "llm_supply_chain": (["tool_invocation_proof", "oob_callback"], "恶意工具描述实际驱动 Agent 调用的落地证据"),
+    "mp_package_disclosure": (["sensitive_content_proof"], "包内提取到真实敏感内容（密钥/接口/逻辑）；仅包可下载不算"),
 }
+
+# 危害陈述必须落到观测动词或量化结果 — 拒绝"可能造成影响"式空话。
+IMPACT_OBSERVATION_VERBS = [
+    "拿到", "读取", "读到", "读出", "获取", "窃取", "导出", "下载", "看到",
+    "执行", "运行", "写入", "修改", "篡改", "删除", "重置", "接管", "登录",
+    "绕过", "冒用", "下单", "支付", "提现", "转账", "泄露", "暴露", "创建",
+    "添加", "注入", "控制", "调用", "回调", "命中", "触发", "生成", "查看",
+]
 
 BANNED_IMPACT_WORDS = ["理论上", "可能存在", "可能存在风险", "could be", "should be", "疑似"]
 
@@ -175,8 +207,32 @@ def _gate_inputs(finding: dict) -> dict:
     return flat
 
 
+def _falsification_ok(falsify) -> bool:
+    """硬门0 结构校验：否定实验必须可检查，不能是 'n/a' 一个占位字符串。
+
+    接受两种形状：
+      - dict: 必须含非空的 request / response / expected_absent
+      - str:  至少 30 个字符的实质描述（占位词 'n/a'/'x'/'无' 过不了）
+    """
+    if isinstance(falsify, dict):
+        return all(str(falsify.get(k) or "").strip()
+                   for k in ("request", "response", "expected_absent"))
+    if isinstance(falsify, str):
+        s = falsify.strip()
+        if len(s) < 30 or s.lower() in ("n/a", "na", "none", "无", "x"):
+            return False
+        return any(v in s for v in ("请求", "响应", "返回", "未出现", "不存在",
+                                    "与", "对比", "对照", "request", "response"))
+    return False
+
+
 def verify_finding(finding: dict) -> dict:
-    """Apply the layered verification gate. Pure, never raises."""
+    """Apply the layered verification gate. Pure, never raises.
+
+    v5.12: every gate is a STRUCTURE check, not a key-existence check —
+    a dict where every "proof" field holds the single character "x" must
+    fail. Unknown/missing vulnerability types are default-deny (硬门4).
+    """
     f = _gate_inputs(finding)
     ev = finding.get("evidence") or {}
     hard, quality = [], []
@@ -186,16 +242,15 @@ def verify_finding(finding: dict) -> dict:
 
     # 硬门 0 — 先证伪：必须先假设“这是正常功能”并跑否定实验推翻它。
     falsify = f.get("falsification") or f.get("negative_control")
-    hard_gate("硬门0 先证伪", bool(falsify), "缺少先证伪记录",
-              "记录否定实验：如果这不是漏洞，最可能的解释是什么，你如何排除")
+    hard_gate("硬门0 先证伪", _falsification_ok(falsify), "缺少可检查的先证伪记录",
+              "记录否定实验：对照请求（request）、其响应（response）、"
+              "与漏洞判定应有的差异（expected_absent）——三段都要真实内容")
 
-    # 硬门 1 — PoC 可复现：原始请求块 + 响应，且至少重放 2 次。
+    # 硬门 1 — PoC 可复现：原始请求块 + 响应 + validator 签发的重放证据。
     req_ok = bool(ev.get("request")) and bool(ev.get("response"))
     tool = str(ev.get("tool") or "").strip().lower()
-    tool_ok = tool not in BANNED_EVIDENCE_TOOLS and (tool in OBSERVING_TOOLS or not tool)
-    # replay_count lives canonically inside the evidence block; accept it on the
-    # finding too (both shapes are in the wild), and fall back to counting
-    # replay_results. Coerce to int so a string "3" still passes.
+    # 空 tool 曾因 `or not tool` 直接通过——空工具不构成服务端观察。
+    tool_ok = tool in OBSERVING_TOOLS
     replays = ev.get("replay_count", finding.get("replay_count"))
     if replays is None:
         replays = len(ev.get("replay_results") or finding.get("replay_results") or [])
@@ -203,37 +258,68 @@ def verify_finding(finding: dict) -> dict:
         replays = int(replays)
     except (TypeError, ValueError):
         replays = 0
-    hard_gate("硬门1 PoC 可复现", req_ok and tool_ok and replays >= 2,
-              "缺原始请求/响应，或证据来源不是可观测请求（%s），或重放次数 <%d（当前 %d）"
+    replay_results = [r for r in (ev.get("replay_results")
+                                  or finding.get("replay_results") or [])
+                      if isinstance(r, dict)]
+    # validator 签发凭据：perform_replay 为每次重放盖 response_hash。
+    validator_signed = bool(ev.get("response_hash")) or \
+        any(r.get("response_hash") for r in replay_results)
+    hard_gate("硬门1 PoC 可复现",
+              req_ok and tool_ok and replays >= 2 and validator_signed,
+              "缺原始请求/响应，或 tool 不在观测白名单（%s），或重放 <%d 次（当前 %d），"
+              "或缺 validator 签发的重放凭据（response_hash）"
               % (tool or "空", 2, replays),
-              "贴 Burp 原始请求块（不要 curl），并至少重放 2 次（evidence.replay_count）")
+              "用 finding_validator.py --replay-request 实弹重放 ≥2 次（自动带 "
+              "response_hash/replayed_at），贴 Burp 原始请求块")
 
     # 硬门 2 — 危害是链路终局，不是中间信号。
     impact = f.get("impact") or f.get("demonstrated_impact")
-    impact_txt = impact if isinstance(impact, str) else json.dumps(impact or {}, ensure_ascii=False)
+    # ensure_ascii=False：默认 True 会把中文先变成 \uXXXX 再扫描，
+    # 导致违禁词只拦 ASCII 而放走中文（历史上"理论上"就这样漏过）。
+    impact_txt = impact if isinstance(impact, str) else json.dumps(
+        impact or {}, ensure_ascii=False)
     weak = any(w in impact_txt for w in BANNED_IMPACT_WORDS)
-    hard_gate("硬门2 危害为链路终局", bool(impact_txt.strip()) and not weak and finding.get("status") == "validated",
-              "危害未落地（缺 impact 字段，或含“理论上/疑似”措辞，或 status != validated）",
+    # 正向校验：危害陈述要含观测动词或量化数字，拒绝"可能造成影响"式空话。
+    concrete = (any(v in impact_txt for v in IMPACT_OBSERVATION_VERBS)
+                or bool(re.search(r"\d", impact_txt)))
+    hard_gate("硬门2 危害为链路终局",
+              bool(impact_txt.strip()) and not weak and concrete
+              and finding.get("status") == "validated",
+              "危害未落地（缺 impact，或含“理论上/疑似”措辞，或无观测动词/量化结果，"
+              "或 status != validated）",
               "写实际打出来的结果：拿到多少条他人数据 / 状态是否真被改 / 命令是否真执行")
 
     # 硬门 3 — 服务端 / 权限边界确认，不是浏览器 JS 假象。
-    hard_gate("硬门3 服务端边界确认", bool(tool) or bool(ev.get("status_code")),
-              "未标注证据来源工具", "标注 tool（httpRequest/curl/runShell）以证明是服务端观察")
+    # 只给 status_code 不给 tool 曾直接通过；必须是白名单内的观测工具。
+    hard_gate("硬门3 服务端边界确认", tool_ok,
+              "证据来源工具缺失或不在白名单（httpRequest/curl/runShell/browser）",
+              "标注 tool（httpRequest/curl/runShell/browser）以证明是服务端/运行时观察")
 
     # 硬门 4 — 按类型命门（不同类型的"关键钥匙"不同）。
-    spec = TYPE_GATES.get(str(finding.get("type")))
-    if spec is None:
-        hard_gate("硬门4 类型命门", True, "")
+    ftype = str(finding.get("type") or "")
+    spec = TYPE_GATES.get(ftype)
+    if not ftype or spec is None:
+        # 默认拒绝：未知/缺失/大小写不符的类型没有命门，静默放行等于无门。
+        hard_gate("硬门4 类型命门", False,
+                  "类型 %r 无命门定义（未知/空类型默认拒绝）" % (ftype or "空"),
+                  "修正 type 拼写，或在 TYPE_GATES 中为该类型补定义并经人工确认")
     else:
         keys, hint = spec
-        gate_label = TYPE_LABELS.get(str(finding.get("type")), str(finding.get("type")))
-        hard_gate("硬门4 类型命门（%s）" % gate_label, bool([k for k in keys if f.get(k)]),
-                  "未命中类型命门责任字段 %s" % "/".join(keys), hint)
+        gate_label = TYPE_LABELS.get(ftype, ftype)
+        # 命门字段必须含实质内容：单字符/占位词不算证明。
+        hit = [k for k in keys
+               if len(str(f.get(k) or "").strip()) >= 4
+               and str(f.get(k)).strip().lower() not in ("n/a", "none", "无", "x")]
+        hard_gate("硬门4 类型命门（%s）" % gate_label, bool(hit),
+                  "未命中类型命门责任字段 %s（字段需含实质内容，占位词无效）" % "/".join(keys),
+                  hint)
 
     # 硬门 5 — 链式追问到终局：同根因接口是否穷举，为何到此为止。
+    scope_note = str(f.get("scope_note") or "").strip()
     hard_gate("硬门5 链式追问到终局",
-              bool(f.get("chain_closed") or f.get("exhausted") or f.get("scope_note")),
-              "未记录同根因接口穷举情况 / 为何到此为止",
+              bool(f.get("chain_closed") or f.get("exhausted"))
+              or len(scope_note) >= 15,
+              "未记录同根因接口穷举情况 / 为何到此为止（占位词无效，需 ≥15 字说明）",
               "说明同类接口是否全测、纵深追到哪一层、为什么停在这里")
 
     # 质量项 — 不卡报告，写进报告说明即可。
@@ -244,7 +330,7 @@ def verify_finding(finding: dict) -> dict:
 
     blocked = [g for g in hard if not g["ok"]]
     return {
-        "id": finding.get("id", ""),
+        "id": str(finding.get("id") or ""),
         "type": finding.get("type", ""),
         "severity": finding.get("severity", ""),
         "passed": not blocked,
@@ -585,14 +671,25 @@ def main(argv: list | None = None) -> int:
 
     floor = SEV_ORDER[args.min_severity]
     gate_results, skipped, builds = [], [], []
-    for f in findings:
+    for idx, f in enumerate(findings):
         sev = str(f.get("severity") or "low")
         if SEV_ORDER.get(sev, 0) < floor:
             skipped.append({"id": f.get("id", ""), "severity": sev, "reason": "低于 --min-severity"})
             continue
-        gate_results.append(verify_finding(f))
+        g = verify_finding(f)
+        g["_index"] = idx  # index-based lookup: id-less findings must not vanish
+        gate_results.append(g)
 
     passed = [g for g in gate_results if g["passed"]]
+    # 被挡 finding 不再消失：全部进入 unverified_leads（lead 状态可另行上报，
+    # 与 AGENTS.md "未过门者只能作为 lead 上报" 对齐）。
+    unverified_leads = [
+        {"id": g["id"], "type": g["type"], "severity": g["severity"],
+         "target": str(findings[g["_index"]].get("target") or ""),
+         "blocked_by": g["blocked_by"],
+         "hints": [h.get("hint") for h in g["hard"] if not h["ok"] and h.get("hint")]}
+        for g in gate_results if not g["passed"]
+    ]
     report = {
         "generated_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": args.mode,
@@ -603,6 +700,7 @@ def main(argv: list | None = None) -> int:
         "blocked": len(gate_results) - len(passed),
         "skipped_below_floor": skipped,
         "gates": gate_results,
+        "unverified_leads": unverified_leads,
     }
 
     if args.gate_only:
@@ -628,9 +726,18 @@ def main(argv: list | None = None) -> int:
         emit_template(template)
 
     outdir = output_dir(args.outdir, args.mode, args.unit)
-    by_id = {str(f.get("id", i)): f for i, f in enumerate(findings)}
+    os.makedirs(outdir, exist_ok=True)
     for g in sorted(passed, key=lambda x: -SEV_ORDER.get(x["severity"], 0)):
-        finding = by_id.get(g["id"], {})
+        finding = findings[g["_index"]]
+        if not str(finding.get("id") or "").strip():
+            # 无 id 的 finding 过去会在 by_id 查找中双双 miss，静默丢掉；
+            # 现在拒绝写盘并显式报告。
+            report.setdefault("unverified_leads", []).append(
+                {"id": "", "type": finding.get("type", ""),
+                 "severity": finding.get("severity", ""),
+                 "target": str(finding.get("target") or ""),
+                 "blocked_by": ["缺 finding.id —— 拒绝写盘"]})
+            continue
         # Duplicate hint must run BEFORE the new file lands in the directory,
         # otherwise it always matches itself.
         dups = dup_warnings(outdir, finding)
@@ -644,7 +751,6 @@ def main(argv: list | None = None) -> int:
     report["output_dir"] = os.path.abspath(outdir)
     report["artifacts"] = builds
     gate_path = os.path.join(outdir, "_gate_report.json")
-    os.makedirs(outdir, exist_ok=True)
     with open(gate_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, ensure_ascii=False, indent=2)
     report["gate_report"] = gate_path

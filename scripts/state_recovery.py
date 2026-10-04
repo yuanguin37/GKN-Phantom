@@ -74,6 +74,10 @@ def validate_checkpoint(checkpoint: dict) -> tuple[bool, str]:
         return False, "history is empty"
 
     context = checkpoint.get("context_snapshot", {})
+    if not isinstance(context, dict):
+        # A non-dict snapshot used to raise AttributeError and break the
+        # (bool, str) contract — report it as a validation failure instead.
+        return False, "context_snapshot is not a dict"
     if not context.get("scope"):
         return False, "context_snapshot missing scope"
     if not context.get("targets"):
@@ -128,7 +132,10 @@ def build_retry_plan(checkpoint: dict, failure_reason: str, attempt: int = 1) ->
     """
     current = checkpoint.get("current", "")
 
-    if attempt < MAX_CHECKPOINT_RETRIES:
+    if attempt <= MAX_CHECKPOINT_RETRIES:
+        # `<=` so attempt 3 itself still gets a (1-item) schedule — the old
+        # `<` silently capped real retries at 2 despite the documented
+        # "up to 3 attempts".
         schedule = []
         for i in range(MAX_CHECKPOINT_RETRIES - attempt + 1):
             delay = RETRY_BACKOFF_MS[min(i, len(RETRY_BACKOFF_MS) - 1)]
@@ -190,7 +197,9 @@ def execute_rollback(checkpoint: dict, rollback_to: str) -> dict:
         "state": rollback_to,
         "msg": f"ROLLBACK from {checkpoint.get('current', '?')} to {rollback_to}",
         "event_type": "rollback",
-        "reason": checkpoint.get("_last_failure_reason", "unknown"),
+        "reason": checkpoint.get("_last_failure_reason")
+                  or checkpoint.get("last_failure_reason")
+                  or "unrecorded (no failure reason attached to checkpoint)",
     })
     # Clear partial results since we're going back to a pre-failure state
     out["partial_results"] = {}

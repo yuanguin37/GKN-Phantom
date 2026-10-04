@@ -60,6 +60,12 @@ VALID_RISK_LEVELS = {"L1", "L2", "L3", "L4"}
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rules")
 
+# Non-rule YAML assets in rules/: these hold WAF fingerprints and mutation
+# strategies (a different schema, consumed by adaptive_engine), NOT
+# DetectionRules. Validating them against the rule schema produced ~142
+# constant errors that drowned out any real problem in the actual rules.
+NON_RULE_FILES = {"waf_signatures.yaml", "mutation_strategies.yaml"}
+
 
 # ---------------------------------------------------------------------------
 # Minimal YAML subset parser (fallback when PyYAML is unavailable)
@@ -627,10 +633,12 @@ class RuleRegistry:
         seen_ids: set[str] = set()
         loaded_files = 0
 
-        # Collect all .yaml, .yml, .json files
+        # Collect all .yaml, .yml, .json files (excluding non-rule assets)
         rule_files = []
         for fname in sorted(os.listdir(self._rules_dir)):
             if fname.startswith("."):
+                continue
+            if fname.lower() in NON_RULE_FILES:
                 continue
             ext = os.path.splitext(fname)[1].lower()
             if ext in (".yaml", ".yml", ".json"):

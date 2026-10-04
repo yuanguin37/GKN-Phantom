@@ -42,6 +42,10 @@ from utils import dump_json
 CN_PROBES = [
     # ==== 泛微 e-cology =====================================================
     {
+        # NOTE: success patterns must never include the REQUEST PATH itself
+        # ("bsh.servlet.BshServlet") — Java error pages echo the requested
+        # URI, which used to turn any echo-back error page into a fake
+        # CRITICAL. Only the servlet's own UI markers count as evidence.
         "type": "component_exposure",
         "name": "Weaver e-cology BeanShell servlet (RCE point)",
         "paths": [
@@ -49,7 +53,7 @@ CN_PROBES = [
             "/weaver/bsh.servlet.BshServlet",
         ],
         "check": "pattern",
-        "patterns": ["BeanShell", "beanshell", "bsh.servlet.BshServlet"],
+        "patterns": ["BeanShell Test Servlet", "bsh.script", "bsh.Interpreter"],
         "not_patterns": ["404", "Not Found"],
         "severity": "critical",
     },
@@ -59,7 +63,7 @@ CN_PROBES = [
         "paths": ["/mobile/plugin/Ssologin.jsp"],
         "check": "pattern",
         "patterns": ["Ssologin", "ssoLogin", "ecology"],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -67,8 +71,9 @@ CN_PROBES = [
         "name": "Weaver e-cology /services/ AXIS WSDL exposure",
         "paths": ["/services/", "/services/listServices"],
         "check": "pattern",
-        "patterns": ["wsdl", "WSDL", "axis", "Axis"],
-        "not_patterns": ["404"],
+        "all_patterns": ["wsdl", "axis"],
+        "patterns": ["listServices", "available services", "Axis"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     # ==== 泛微 e-office =====================================================
@@ -78,7 +83,7 @@ CN_PROBES = [
         "paths": ["/eoffice10/", "/eoffice/"],
         "check": "pattern",
         "patterns": ["eoffice", "e-office"],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "medium",
     },
     {
@@ -96,8 +101,10 @@ CN_PROBES = [
         "name": "Seeyon getSessionList.jsp unauth session disclosure",
         "paths": ["/seeyon/getSessionList.jsp"],
         "check": "pattern",
-        "patterns": ["session", "Session", "seeyon"],
-        "not_patterns": ["404"],
+        # bare "session"/"Session" matches half of the web — require
+        # session-list content markers instead
+        "patterns": ["sessionList", "sessionID", "sessionId", "lastLogin"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -106,7 +113,7 @@ CN_PROBES = [
         "paths": ["/seeyon/htmlofficeservlet"],
         "check": "status",
         "status_codes": [200, 500],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -115,7 +122,7 @@ CN_PROBES = [
         "paths": ["/seeyon/wpsAssistServlet"],
         "check": "status",
         "status_codes": [200, 500],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -124,6 +131,7 @@ CN_PROBES = [
         "paths": ["/seeyon/main.do", "/seeyon/login.jsp", "/login.jsp"],
         "check": "pattern",
         "patterns": ["seeyon", "Seeyon", "致远"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== 通达 OA ===========================================================
@@ -133,6 +141,7 @@ CN_PROBES = [
         "paths": ["/general/index.php", "/logincheck.php", "/ispirit/logout.php"],
         "check": "pattern",
         "patterns": ["TONGDA", "tongda", "通达", "td_", "ispirit"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     {
@@ -163,8 +172,8 @@ CN_PROBES = [
         "name": "Yonyou NC BeanShell servlet (RCE point)",
         "paths": ["/servlet/~ic/bsh.servlet.BshServlet"],
         "check": "pattern",
-        "patterns": ["BeanShell", "beanshell", "bsh.servlet.BshServlet"],
-        "not_patterns": ["404"],
+        "patterns": ["BeanShell Test Servlet", "bsh.script", "bsh.Interpreter"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "critical",
     },
     {
@@ -172,8 +181,10 @@ CN_PROBES = [
         "name": "Yonyou NC ManagerServlet (info disclosure)",
         "paths": ["/servlet/~ic/nc.bs.framework.mx.manager.ManagerServlet"],
         "check": "pattern",
-        "patterns": ["nc.bs.framework", "version"],
-        "not_patterns": ["404"],
+        # bare "version" dropped: any page mentioning "version" used to
+        # become a fake high; the framework class name alone is the signal
+        "patterns": ["nc.bs.framework"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -181,8 +192,9 @@ CN_PROBES = [
         "name": "Yonyou uapws service exposure",
         "paths": ["/uapws/service/", "/uapws/"],
         "check": "pattern",
-        "patterns": ["wsdl", "WSDL", "uapws"],
-        "not_patterns": ["404"],
+        "all_patterns": ["wsdl", "uapws"],
+        "patterns": ["uapws"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -191,6 +203,7 @@ CN_PROBES = [
         "paths": ["/portal/", "/login.jsp"],
         "check": "pattern",
         "patterns": ["用友", "yonyou", "Yonyou", "YONYOU", "nc.ui"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== 禅道 ==============================================================
@@ -202,8 +215,11 @@ CN_PROBES = [
             "/zentao/index.php?mode=getconfig",
         ],
         "check": "pattern",
-        "patterns": ["zentao", "ZenTao", 'version'],
-        "not_patterns": ["404"],
+        # bare "version" dropped — co-occurrence of zentao token + quoted
+        # "version" JSON key is the real signal
+        "all_patterns": ["zentao", '"version"'],
+        "patterns": ["zentao", "ZenTao", "禅道"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "medium",
     },
     {
@@ -212,6 +228,7 @@ CN_PROBES = [
         "paths": ["/zentao/", "/www/", "/user-login.html"],
         "check": "pattern",
         "patterns": ["zentao", "ZenTao", "禅道"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== JeecgBoot =========================================================
@@ -223,10 +240,13 @@ CN_PROBES = [
             "/api/jmreport/queryFieldBySql",
         ],
         "method": "POST",
-        "post_body": '{"sql": "select \'GKNVERIFY\'"}',
+        # md5() proves SERVER-SIDE SQL execution: a reflective API that just
+        # echoes the submitted JSON contains "md5('GKNVERIFY')" but never its
+        # computed digest f9c59a27cb0369a1dd45455c24de0e7f.
+        "post_body": '{"sql": "select md5(\'GKNVERIFY\')"}',
         "post_content_type": "application/json",
         "check": "pattern",
-        "patterns": ["GKNVERIFY"],
+        "patterns": ["f9c59a27cb0369a1dd45455c24de0e7f"],
         "severity": "critical",
     },
     {
@@ -237,7 +257,10 @@ CN_PROBES = [
             "/api/jmreport/list",
         ],
         "check": "pattern",
-        "patterns": ["jmreport", "total", "records"],
+        # "total"/"records" alone are generic JSON words — require them
+        # together (a report-list JSON) instead of any single one
+        "all_patterns": ["jmreport", "total"],
+        "patterns": ["jmreport"],
         "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
@@ -249,7 +272,8 @@ CN_PROBES = [
             "/api/sys/user/list",
         ],
         "check": "pattern",
-        "patterns": ["username", "records", "total", "jeecg"],
+        "all_patterns": ["total", "records"],
+        "patterns": ["username", "jeecg"],
         "not_patterns": ["404", "Not Found", "login", "Login"],
         "severity": "high",
     },
@@ -259,6 +283,7 @@ CN_PROBES = [
         "paths": ["/jeecg-boot/", "/jeecg-boot/sys/login"],
         "check": "pattern",
         "patterns": ["jeecg", "Jeecg", "JEECG"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== 若依 RuoYi ========================================================
@@ -271,8 +296,8 @@ CN_PROBES = [
             "/dev-api/druid/index.html",
         ],
         "check": "pattern",
-        "patterns": ["Druid Stat Index", "druid-login", "Druid"],
-        "not_patterns": ["404"],
+        "patterns": ["Druid Stat Index", "druid-login"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -284,7 +309,8 @@ CN_PROBES = [
             "/v1/user/list",
         ],
         "check": "pattern",
-        "patterns": ["userName", "total", "rows"],
+        "all_patterns": ["total", "rows"],
+        "patterns": ["userName"],
         "not_patterns": ["404", "Not Found", "login", "Login"],
         "severity": "high",
     },
@@ -294,6 +320,7 @@ CN_PROBES = [
         "paths": ["/", "/login"],
         "check": "pattern",
         "patterns": ["若依", "RuoYi", "ruoyi"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== 帆软 FineReport ===================================================
@@ -306,8 +333,9 @@ CN_PROBES = [
             "/webroot/decision/",
         ],
         "check": "pattern",
-        "patterns": ["FineReport", "finereport", "帆软", "decision"],
-        "not_patterns": ["404"],
+        # bare "decision" dropped (appears on any page about decisions)
+        "patterns": ["FineReport", "finereport", "帆软"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "medium",
     },
     # ==== 亿邮 ==============================================================
@@ -317,7 +345,7 @@ CN_PROBES = [
         "paths": ["/apilogin.php"],
         "check": "pattern",
         "patterns": ["eyou", "Eyou", "亿邮"],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     # ==== 金蝶 ==============================================================
@@ -327,7 +355,7 @@ CN_PROBES = [
         "paths": ["/K3Cloud/", "/kingdee/", "/K3Cloud/Login.aspx"],
         "check": "pattern",
         "patterns": ["K3Cloud", "k3cloud", "金蝶", "kingdee", "Kingdee"],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "medium",
     },
     # ==== 蓝凌 ==============================================================
@@ -340,7 +368,7 @@ CN_PROBES = [
         ],
         "check": "pattern",
         "patterns": ["landray", "Landray", "蓝凌", "sys_search"],
-        "not_patterns": ["404"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "high",
     },
     {
@@ -349,6 +377,7 @@ CN_PROBES = [
         "paths": ["/login.do"],
         "check": "pattern",
         "patterns": ["landray", "Landray", "蓝凌"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     # ==== 红帆 / 万户 =======================================================
@@ -358,6 +387,7 @@ CN_PROBES = [
         "paths": ["/hh/", "/default.aspx"],
         "check": "pattern",
         "patterns": ["红帆", "ioffice", "hhsoft"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
     {
@@ -366,6 +396,7 @@ CN_PROBES = [
         "paths": ["/default/html/index.jsp"],
         "check": "pattern",
         "patterns": ["万户", "ezOFFICE", "ezoffice"],
+        "not_patterns": ["404", "Not Found"],
         "severity": "low",
     },
 ]
@@ -375,7 +406,9 @@ def probe_cn_components(targets: list[str]) -> list[dict]:
     """Run all CN component probes against every target.
 
     Reuses quick_combat._run_quick_probe (lazy import avoids a circular
-    dependency: quick_combat imports this module at pipeline time).
+    dependency: quick_combat imports this module at pipeline time), so CN
+    probes get the same rate limiting, auth headers and soft-404 suppression
+    as every other layer.
 
     Returns finding dicts in the standard pipeline shape. Any per-probe
     error is swallowed (never aborts the batch).
@@ -384,6 +417,10 @@ def probe_cn_components(targets: list[str]) -> list[dict]:
 
     findings: list[dict] = []
     for target in targets:
+        try:
+            qc.get_soft404_baseline(target)  # not-found template first
+        except Exception:
+            pass
         for probe in CN_PROBES:
             try:
                 findings.extend(qc._run_quick_probe(target, probe))

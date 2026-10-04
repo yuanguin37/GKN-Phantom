@@ -1,6 +1,6 @@
 # GKN-Phantom 双场景使用手册
 
-> 适用版本：v5.11.0（v5.8-v5.11 新增四个知识域：**AI/LLM 应用安全**（`ai_llm_security.md`）、**小程序安全**（`miniprogram_security.md`）、**Android 组件审计 + APK 逆向**（`apk_recon.py` + `android_audit.md`/`apk_reversing.md`）、**Windows PE 逆向**（`pe_reversing.md`）；v5.7 新增纪律层 `AGENTS.md`、业务逻辑/越权方法论层 `business_logic.py`、触发信号路由表与中文化；v5.5 起匹配机制为 Trie/Aho-Corasick 预过滤，命令用法不变，扫描大响应更快）
+> 适用版本：v5.12.0（v5.8-v5.11 新增四个知识域：**AI/LLM 应用安全**（`ai_llm_security.md`）、**小程序安全**（`miniprogram_security.md`）、**Android 组件审计 + APK 逆向**（`apk_recon.py` + `android_audit.md`/`apk_reversing.md`）、**Windows PE 逆向**（`pe_reversing.md`）；v5.7 新增纪律层 `AGENTS.md`、业务逻辑/越权方法论层 `business_logic.py`、触发信号路由表与中文化；v5.5 起匹配机制为 Trie/Aho-Corasick 预过滤，命令用法不变，扫描大响应更快）
 > 适用场景：**护网行动（防守方自查/验证）** 与 **漏洞挖掘（授权 SRC / 众测 / 赏金）**
 > 红线：所有使用必须以**书面授权**为前提。护网场景测的是己方资产；漏洞挖掘场景测的是 SRC 公告范围内的资产。越界即违法。
 
@@ -243,7 +243,7 @@ v5.3 起 Quick Combat 的深挖层默认开启（`--no-deep` 可关）：命中�
 
 | 场景 | 命令 |
 |------|------|
-| 快速过筛 | `python scripts/quick_combat.py --targets t.txt --severity critical,high,medium` |
+| 快速过筛 | `python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized --targets t.txt --severity critical,high,medium` |
 | 关闭深挖层（纯 v5.1 行为） | 加 `--no-deep` |
 | 无 nuclei 环境 | 加 `--no-nuclei`（仅用内置探针） |
 | 只看内置探针 | 加 `--no-nuclei --quick-probes-only` 等价行为 |

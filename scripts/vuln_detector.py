@@ -107,7 +107,7 @@ class DetectionRule:
 
     v5.1 fields:
       auto_verifiable — the candidate finding can be verified end-to-end by
-        scripts/auto_verifier.py WITHOUT manual intervention (HTTP replay +
+        scripts/finding_validator.py WITHOUT manual intervention (HTTP replay +
         deterministic signal matching, or pure local analysis).
       verification_method — how the auto-verification is performed:
         "http_probe"   : single replayed HTTP request, signal in response
@@ -698,7 +698,7 @@ def candidate_finding(rule, target, evidence_hint=""):
     """Build a candidate Finding (status=detected) from a rule + target.
 
     v5.1: each candidate carries `auto_verifiable` / `verification_method`
-    so the VALIDATION state (scripts/auto_verifier.py) knows which findings
+    so the VALIDATION state (scripts/finding_validator.py) knows which findings
     can be closed-loop verified without manual intervention.
     """
     return {
@@ -793,23 +793,58 @@ def build_plan(assets, tiers, safe_mode=True, include_l4=False, max_per_type=Non
     return plan
 
 
+def _luhn_valid(number: str) -> bool:
+    """Luhn checksum over the digits of `number`."""
+    digits = [int(d) for d in re.sub(r"\D", "", number)]
+    if not 13 <= len(digits) <= 19:
+        return False
+    checksum = 0
+    parity = (len(digits) - 2) % 2
+    for i, d in enumerate(digits[:-1]):
+        if i % 2 == parity:
+            d *= 2
+            if d > 9:
+                d -= 9
+        checksum += d
+    return (checksum + digits[-1]) % 10 == 0
+
+
+# Major IIN prefixes: Visa / MasterCard (incl. 2-series) / Amex / Discover /
+# JCB / Diners / UnionPay
+_CARD_IIN_RE = re.compile(r"^(?:4|5[1-5]|2[2-7]|3[47]|3(?:0[0-5]|[68])|6(?:011|5)|35|62|81)")
+
+
 def classify_data_exposure(response_body):
     """Check whether a response body triggers data_exposure (critical upgrade).
 
     Returns (triggered, score). score = sum of matched category flags.
+
+    Thresholds are deliberately strict — this function upgrades findings to
+    CRITICAL, so a benign page with one long number must never fire:
+      - emails >= 10 distinct
+      - phone-shaped strings >= 5
+      - SSN-shaped strings >= 5 and plausibly valid (one NNN-NN-NNNN match
+        used to fire critical on any page containing a date-like string)
+      - card candidates: 13-16 digits + valid Luhn + major IIN prefix
+        (a bare 13-16 digit run — timestamp, order id — used to fire)
     """
     score = 0
     emails = re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", response_body)
-    if len(emails) >= 10:
+    if len(set(emails)) >= 10:
         score += 3
     phones = re.findall(r"\b(?:\+?\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b", response_body)
     if len(phones) >= 5:
         score += 2
     ssn = re.findall(r"\b\d{3}-\d{2}-\d{4}\b", response_body)
-    if ssn:
+    ssn = [s for s in ssn if not s.startswith(("000", "666", "9"))]
+    if len(ssn) >= 5:
         score += 3
     cards = re.findall(r"\b(?:\d[ -]*?){13,16}\b", response_body)
-    if cards:
+    real_cards = [
+        c for c in cards
+        if _luhn_valid(c) and _CARD_IIN_RE.match(re.sub(r"\D", "", c))
+    ]
+    if real_cards:
         score += 3
     secret_keys = re.findall(r'(?i)["\'](password|secret|api_key|apikey|token|access_key)["\']\s*[:=]\s*["\'][^"\']{4,}', response_body)
     if secret_keys:

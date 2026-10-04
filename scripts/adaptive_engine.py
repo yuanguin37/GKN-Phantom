@@ -336,7 +336,11 @@ MUTATION_STRATEGIES = {
     "jwt_deep_analysis": [
         lambda p: p.replace("alg\":\"HS256\"", "alg\":\"none\""),
         lambda p: p.replace("alg\":\"RS256\"", "alg\":\"HS256\""),
-        lambda p: p.replace("eyJ", "eyJ"),              # preserve header
+        # The old third entry was `p.replace("eyJ","eyJ")` — a literal
+        # identity that `seen` always filtered out, so this type yielded
+        # one fewer variant than documented. Base64-flip the HS256 header
+        # to its {"alg":"none"} equivalent instead.
+        lambda p: p.replace("eyJhbGciOiJIUzI1NiIs", "eyJhbGciOiJub25lIiw"),
         lambda p: p.replace(".", ".."),
         lambda p: p.replace("Bearer ", "Bearer%20"),
     ],

@@ -601,6 +601,20 @@ def _case_safe(literal: str) -> bool:
     return True
 
 
+# Characters with EXTRA case-equivalences under re.IGNORECASE beyond
+# str.lower() (CPython sre's fold-fixup table): a CI literal containing any
+# of these can match text the lowered-text AC scan never sees — e.g. the
+# literal "confıg" trick: text "config" written with U+0131 (ı) still matches
+# (?i)config, but "confıg".lower() does not contain "config". A guarded CI
+# literal with such a char is an UNSOUND guard (missed detections).
+_CI_UNSAFE_CHARS = frozenset("sSiIkKσςµμſıKİ")
+
+
+def _ci_literal_safe(lit: str) -> bool:
+    """Case-safe for the case-INSENSITIVE channel (strict)."""
+    return _case_safe(lit) and not (set(lit) & _CI_UNSAFE_CHARS)
+
+
 def required_literal_sets(pattern: str) -> list[list[frozenset[str]]] | None:
     """Required-literal DNF per top-level branch for a regex source string.
 
@@ -623,8 +637,15 @@ def required_literal_sets(pattern: str) -> list[list[frozenset[str]]] | None:
                 # term blowup, or a branch satisfiable with no literal
                 return None
             lits = [lit for term in dnf for lit in term]
-            if all(_case_safe(lit) for lit in lits):
-                result.append(dnf)
+            if not all(_case_safe(lit) for lit in lits):
+                # This branch can match text that lacks every guarded
+                # literal. Skipping JUST this branch and registering the
+                # remaining ones would register an unsound DNF for the whole
+                # pattern (e.g. 'password|pässword' would claim 'password'
+                # is required while the äsbranch matches without it) — a
+                # missed detection. Bail out of the ENTIRE pattern instead.
+                return None
+            result.append(dnf)
         return result or None
     except (_Unsupported, RecursionError, ValueError, KeyError, IndexError):
         return None
@@ -674,10 +695,21 @@ class PrefilteredRegexSet:
                 compiled = regex
             self._entries.append((key, compiled))
             branches = required_literal_sets(compiled.pattern)
+            ci = bool(compiled.flags & re.IGNORECASE)
+            if branches is not None and ci:
+                # re.IGNORECASE folds MORE than str.lower() (ſ→s, ı→i,
+                # K→k, µ↔μ, σ↔ς): a lowered AC scan over text.lower()
+                # cannot see those equivalences, so a CI literal containing
+                # such a char is an unsound guard. Demote the entry to
+                # unguarded (always evaluated) — correctness over speed.
+                if any(
+                    not _ci_literal_safe(lit)
+                    for dnf in branches for term in dnf for lit in term
+                ):
+                    branches = None
             if branches is None:
                 self._unguarded.add(key)
                 continue
-            ci = bool(compiled.flags & re.IGNORECASE)
             # Branch literals must be stored in the same case mode the AC
             # scans in, otherwise the candidate check can never succeed.
             if ci:

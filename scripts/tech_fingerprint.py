@@ -162,32 +162,35 @@ SET_COOKIE_PATTERNS: list[tuple[str, str, str, float]] = [
 # ---------------------------------------------------------------------------
 # 2. HTML Body Analysis patterns
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Attribute-order tolerant: `<meta content="WordPress 6.4" name="generator">`
+# used to be missed because the pattern forced name= before content=.
 META_GENERATOR_PATTERNS: list[tuple[str, re.Pattern, float]] = [
-    ("WordPress",  re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?WordPress\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Drupal",     re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Drupal\s*([\d.]*)', re.IGNORECASE),    CONFIDENCE_HIGH),
-    ("Joomla",     re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Joomla!?\s*[\-\s]*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Shopify",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Shopify', re.IGNORECASE),            CONFIDENCE_MEDIUM),
-    ("Magento",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Magento', re.IGNORECASE),            CONFIDENCE_MEDIUM),
-    ("MediaWiki",  re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?MediaWiki\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Ghost",      re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Ghost\s*([\d.]*)', re.IGNORECASE),  CONFIDENCE_HIGH),
-    ("Hugo",       re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Hugo\s*([\d.]*)', re.IGNORECASE),   CONFIDENCE_HIGH),
-    ("Jekyll",     re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Jekyll\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Hexo",       re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Hexo', re.IGNORECASE),              CONFIDENCE_MEDIUM),
-    ("Zendesk",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Zendesk', re.IGNORECASE),           CONFIDENCE_MEDIUM),
-    ("Wix",        re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Wix\.com', re.IGNORECASE),          CONFIDENCE_HIGH),
-    ("Squarespace",re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Squarespace', re.IGNORECASE),       CONFIDENCE_HIGH),
-    ("Weebly",     re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Weebly', re.IGNORECASE),           CONFIDENCE_MEDIUM),
-    ("TYPO3",      re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?TYPO3', re.IGNORECASE),            CONFIDENCE_MEDIUM),
-    ("PrestaShop", re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?PrestaShop', re.IGNORECASE),       CONFIDENCE_MEDIUM),
-    ("OpenCart",   re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?OpenCart', re.IGNORECASE),         CONFIDENCE_MEDIUM),
-    ("WooCommerce",re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?WooCommerce\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("DNN",        re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?DotNetNuke', re.IGNORECASE),       CONFIDENCE_HIGH),
-    ("Umbraco",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Umbraco', re.IGNORECASE),          CONFIDENCE_MEDIUM),
-    ("Sitecore",   re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Sitecore', re.IGNORECASE),         CONFIDENCE_MEDIUM),
-    ("Kentico",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Kentico', re.IGNORECASE),          CONFIDENCE_MEDIUM),
-    ("Episerver",  re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Episerver', re.IGNORECASE),        CONFIDENCE_MEDIUM),
-    ("Salesforce", re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?Salesforce', re.IGNORECASE),       CONFIDENCE_MEDIUM),
-    ("HubSpot",    re.compile(r'<meta[^>]*\bname\s*=\s*["\']?generator["\']?[^>]*\bcontent\s*=\s*["\']?HubSpot', re.IGNORECASE),          CONFIDENCE_MEDIUM),
+    ("WordPress",  re.compile(r'<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?WordPress\s*([\d.]*)|<meta[^>]*\bcontent\s*=\s*["\']?WordPress\s*([\d.]*)[^>]*generator', re.IGNORECASE), CONFIDENCE_HIGH),
+    ("Drupal",     re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?Drupal\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?Drupal\s*([\d.]*)', re.IGNORECASE),    CONFIDENCE_HIGH),
+    ("Joomla",     re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?Joomla!?[\s\-]*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?Joomla!?[\s\-]*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
+    ("Shopify",    re.compile(r'<meta[^>]*generator[^>]*["\']Shopify|["\']Shopify[^>]*generator', re.IGNORECASE),            CONFIDENCE_MEDIUM),
+    ("Magento",    re.compile(r'<meta[^>]*generator[^>]*["\']Magento|["\']Magento[^>]*generator', re.IGNORECASE),            CONFIDENCE_MEDIUM),
+    ("MediaWiki",  re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?MediaWiki\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?MediaWiki\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
+    ("Ghost",      re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?Ghost\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?Ghost\s*([\d.]*)', re.IGNORECASE),  CONFIDENCE_HIGH),
+    ("Hugo",       re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?Hugo\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?Hugo\s*([\d.]*)', re.IGNORECASE),   CONFIDENCE_HIGH),
+    ("Jekyll",     re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?Jekyll\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?Jekyll\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
+    ("Hexo",       re.compile(r'<meta[^>]*generator[^>]*["\']Hexo|["\']Hexo[^>]*generator', re.IGNORECASE),              CONFIDENCE_MEDIUM),
+    ("Zendesk",    re.compile(r'<meta[^>]*generator[^>]*["\']Zendesk|["\']Zendesk[^>]*generator', re.IGNORECASE),           CONFIDENCE_MEDIUM),
+    ("Wix",        re.compile(r'<meta[^>]*generator[^>]*["\']Wix\.com|["\']Wix\.com[^>]*generator', re.IGNORECASE),          CONFIDENCE_HIGH),
+    ("Squarespace",re.compile(r'<meta[^>]*generator[^>]*["\']Squarespace|["\']Squarespace[^>]*generator', re.IGNORECASE),       CONFIDENCE_HIGH),
+    ("Weebly",     re.compile(r'<meta[^>]*generator[^>]*["\']Weebly|["\']Weebly[^>]*generator', re.IGNORECASE),           CONFIDENCE_MEDIUM),
+    ("TYPO3",      re.compile(r'<meta[^>]*generator[^>]*["\']TYPO3|["\']TYPO3[^>]*generator', re.IGNORECASE),            CONFIDENCE_MEDIUM),
+    ("PrestaShop", re.compile(r'<meta[^>]*generator[^>]*["\']PrestaShop|["\']PrestaShop[^>]*generator', re.IGNORECASE),       CONFIDENCE_MEDIUM),
+    ("OpenCart",   re.compile(r'<meta[^>]*generator[^>]*["\']OpenCart|["\']OpenCart[^>]*generator', re.IGNORECASE),         CONFIDENCE_MEDIUM),
+    ("WooCommerce",re.compile(r'<meta[^>]*\bcontent\s*=\s*["\']?WooCommerce\s*([\d.]*)[^>]*generator|<meta[^>]*generator[^>]*\bcontent\s*=\s*["\']?WooCommerce\s*([\d.]*)', re.IGNORECASE), CONFIDENCE_HIGH),
+    ("DNN",        re.compile(r'<meta[^>]*generator[^>]*["\']DotNetNuke|["\']DotNetNuke[^>]*generator', re.IGNORECASE),       CONFIDENCE_HIGH),
+    ("Umbraco",    re.compile(r'<meta[^>]*generator[^>]*["\']Umbraco|["\']Umbraco[^>]*generator', re.IGNORECASE),           CONFIDENCE_MEDIUM),
+    ("Sitecore",   re.compile(r'<meta[^>]*generator[^>]*["\']Sitecore|["\']Sitecore[^>]*generator', re.IGNORECASE),         CONFIDENCE_MEDIUM),
+    ("Kentico",    re.compile(r'<meta[^>]*generator[^>]*["\']Kentico|["\']Kentico[^>]*generator', re.IGNORECASE),           CONFIDENCE_MEDIUM),
+    ("Episerver",  re.compile(r'<meta[^>]*generator[^>]*["\']Episerver|["\']Episerver[^>]*generator', re.IGNORECASE),        CONFIDENCE_MEDIUM),
+    ("Salesforce", re.compile(r'<meta[^>]*generator[^>]*["\']Salesforce|["\']Salesforce[^>]*generator', re.IGNORECASE),       CONFIDENCE_MEDIUM),
+    ("HubSpot",    re.compile(r'<meta[^>]*generator[^>]*["\']HubSpot|["\']HubSpot[^>]*generator', re.IGNORECASE),           CONFIDENCE_MEDIUM),
 ]
 
 # Script src patterns for JS frameworks
@@ -227,7 +230,7 @@ SCRIPT_FRAMEWORK_PATTERNS: list[tuple[str, re.Pattern, float]] = [
 CMS_PATH_PATTERNS: list[tuple[str, re.Pattern, float]] = [
     ("WordPress", re.compile(r"/wp-content/|/wp-includes/|/wp-json/|/wp-admin/", re.IGNORECASE),           CONFIDENCE_HIGH),
     ("Drupal",    re.compile(r"/sites/default/files/|/sites/all/modules/|/sites/all/themes/", re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Joomla",    re.compile(r"/components/com_|/modules/mod_|/templates/|/administrator/", re.IGNORECASE),   CONFIDENCE_HIGH),
+    ("Joomla",    re.compile(r"/components/com_|/modules/mod_|/media/jui/|/media/system/js/|Joomla\.token|/templates/(?:beez|protostar|cassiopeia|atum)/|/administrator/", re.IGNORECASE),   CONFIDENCE_HIGH),
     ("Magento",   re.compile(r"/skin/frontend/|/media/catalog/|/js/mage/", re.IGNORECASE),                   CONFIDENCE_HIGH),
     ("Shopify",   re.compile(r"cdn\.shopify\.com|/cdn/shop/", re.IGNORECASE),                                 CONFIDENCE_HIGH),
     ("Wix",       re.compile(r"static\.wixstatic\.com|wix-code-sdk", re.IGNORECASE),                          CONFIDENCE_HIGH),
@@ -292,7 +295,7 @@ ERROR_PAGE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
     ("Tomcat",            "server",    re.compile(r"Apache Tomcat/[\d.]+\s*-\s*Error report", re.IGNORECASE),    CONFIDENCE_HIGH),
     ("nginx",             "server",    re.compile(r"<title>404 Not Found</title>\s*</head>\s*<body>\s*<center><h1>404 Not Found</h1></center>\s*<hr><center>nginx", re.IGNORECASE), CONFIDENCE_HIGH),
     ("PHP",               "language",  re.compile(r"<b>Warning</b>:|on line <b>\d+</b>|Fatal error:|Uncaught Error:", re.IGNORECASE), CONFIDENCE_HIGH),
-    ("IIS",               "server",    re.compile(r"The resource cannot be found\.|HTTP Error 404|Server Error in '/' Application|IIS \d+\.\d+ Detailed Error", re.IGNORECASE), CONFIDENCE_HIGH),
+    ("IIS",               "server",    re.compile(r"The resource cannot be found\.|HTTP Error 404\.\d+|Server Error in '/' Application|IIS \d+\.\d+ Detailed Error", re.IGNORECASE), CONFIDENCE_HIGH),
     ("Express",           "framework", re.compile(r"<pre>Cannot (?:GET|POST|PUT|DELETE|PATCH) /[^<]*</pre>", re.IGNORECASE),  CONFIDENCE_MEDIUM),
     ("Flask",             "framework", re.compile(r"werkzeug\.debug|Debugger PIN:", re.IGNORECASE),              CONFIDENCE_HIGH),
     ("Ruby on Rails",     "framework", re.compile(r"Rails\.root:|Action Controller: Exception caught|Routing Error", re.IGNORECASE), CONFIDENCE_HIGH),
@@ -412,13 +415,15 @@ TECH_DB_PAIRINGS: dict[str, list[tuple[str, float]]] = {
 # 8. OS detection indicators
 # ---------------------------------------------------------------------------
 OS_INDICATORS: list[tuple[str, re.Pattern, float]] = [
-    ("Linux",   re.compile(r"Linux|Ubuntu|Debian|CentOS|Red\s*Hat|Fedora|Alpine|SUSE|Gentoo|Arch", re.IGNORECASE),     CONFIDENCE_LOW),
+    # Bare `Arch`/`Alpine` matched "architecture"/"archive"/Alpine.js —
+    # require the distro name as a phrase, word-bounded.
+    ("Linux",   re.compile(r"Linux|Ubuntu|Debian|CentOS|Red\s*Hat|Fedora|Alpine\s*Linux|SUSE|Gentoo|Arch\s*Linux", re.IGNORECASE),     CONFIDENCE_LOW),
     ("Windows", re.compile(r"Win32|Win64|Windows\s*(?:NT|Server)\s*[\d.]+|IIS", re.IGNORECASE),                         CONFIDENCE_LOW),
     ("FreeBSD", re.compile(r"FreeBSD", re.IGNORECASE),                                                                  CONFIDENCE_MEDIUM),
     ("OpenBSD", re.compile(r"OpenBSD", re.IGNORECASE),                                                                  CONFIDENCE_MEDIUM),
     ("NetBSD",  re.compile(r"NetBSD", re.IGNORECASE),                                                                   CONFIDENCE_MEDIUM),
     ("Solaris", re.compile(r"Solaris|SunOS|Sun\s*Java", re.IGNORECASE),                                                CONFIDENCE_LOW),
-    ("AIX",     re.compile(r"AIX", re.IGNORECASE),                                                                      CONFIDENCE_MEDIUM),
+    ("AIX",     re.compile(r"\bAIX\b"),                                                                                CONFIDENCE_MEDIUM),
 ]
 
 # Server header → OS hints
@@ -679,9 +684,14 @@ def _mmh3_32(data: bytes, seed: int = 0) -> int:
 
 
 def _b64encode_favicon(favicon_bytes: bytes) -> str:
-    """Return base64-encoded favicon data (for evidence/serialization)."""
+    """base64 text in the Shodan favicon convention (76-char lines + newline).
+
+    FAVICON_HASH_MAP values are mmh3 over THIS base64 text — hashing the raw
+    .ico bytes (the old behavior) can never match any of them, which made the
+    whole favicon path dead code.
+    """
     import base64
-    return base64.b64encode(favicon_bytes).decode("ascii")
+    return base64.encodebytes(favicon_bytes).decode("ascii")
 
 
 # =============================================================================
@@ -822,7 +832,9 @@ def analyze_html_body(body: str) -> list[TechDetection]:
 
 
 _CSS_FRAMEWORK_PATTERNS: list[tuple[str, re.Pattern, float]] = [
-    ("Bootstrap",   re.compile(r'(?:bootstrap)(?:\.min)?\.css|class\s*=\s*"[^"]*\b(?:container|row|col-(?:xs|sm|md|lg|xl)-\d+)\b', re.IGNORECASE), CONFIDENCE_HIGH),
+    # Bootstrap's bare `container`/`row` classnames match half of the web —
+    # require the Bootstrap-specific grid syntax (col-md-N) or its artifacts.
+    ("Bootstrap",   re.compile(r'(?:bootstrap)[\-.][\d.]+(?:\.min)?\.(?:css|js)|class\s*=\s*"[^"]*\bcol-(?:xs|sm|md|lg|xl|xxl)-\d{1,2}\b[^"]*\bcol-|btn-outline-(?:primary|success|danger)|bootstrap\.bundle', re.IGNORECASE), CONFIDENCE_HIGH),
     ("Tailwind CSS",re.compile(r'(?:tailwindcss|tailwind\.config)|class\s*=\s*"[^"]*\b(?:flex\s|grid\s|bg-(?:red|blue|green|gray|white|black)-\d+|text-(?:xs|sm|base|lg|xl|2xl))', re.IGNORECASE), CONFIDENCE_MEDIUM),
     ("Bulma",       re.compile(r'(?:bulma)(?:\.min)?\.css|class\s*=\s*"[^"]*\b(?:is-(?:primary|link|info|success|warning|danger))', re.IGNORECASE), CONFIDENCE_MEDIUM),
     ("Foundation",  re.compile(r'(?:foundation)(?:\.min)?\.css|class\s*=\s*"[^"]*\b(?:small-\d+|medium-\d+|large-\d+|columns)', re.IGNORECASE), CONFIDENCE_MEDIUM),
@@ -871,13 +883,17 @@ def _classify_meta_tech(name: str) -> str:
 # =============================================================================
 
 def analyze_favicon(favicon_bytes: bytes | None) -> list[TechDetection]:
-    """Analyze favicon by computing mmh3 hash and matching against known hashes."""
+    """Analyze favicon by computing mmh3 hash and matching against known hashes.
+
+    Hash input is the base64-encoded bytes (Shodan convention) via
+    _b64encode_favicon — NOT the raw .ico bytes.
+    """
     detections: list[TechDetection] = []
     if not favicon_bytes:
         return detections
 
     try:
-        h = _mmh3_32(favicon_bytes)
+        h = _mmh3_32(_b64encode_favicon(favicon_bytes).encode("ascii"))
     except (struct.error, IndexError):
         return detections
 
@@ -980,14 +996,18 @@ def analyze_javascript_globals(html_body: str, js_files: list[str] | None = None
 _INLINE_JS_FRAMEWORK_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
     ("Vue.js",    "javascript", re.compile(r'(?:Vue\.createApp|new\s+Vue\s*\(|Vue\.component\()', re.IGNORECASE), CONFIDENCE_HIGH),
     ("React",     "javascript", re.compile(r'(?:ReactDOM\.(?:render|createRoot|hydrate)|React\.createElement|createRoot\()', re.IGNORECASE), CONFIDENCE_HIGH),
-    ("Angular",   "javascript", re.compile(r'(?:platformBrowserDynamic\(\)|NgModule\s*\(|Component\s*\()', re.IGNORECASE), CONFIDENCE_HIGH),
+    # @Component({ with the decorator prefix is Angular-specific; a bare
+    # Component( matched every React class component.
+    ("Angular",   "javascript", re.compile(r'(?:platformBrowserDynamic\(\)|NgModule\s*\(|@Component\s*\(\s*\{)', re.IGNORECASE), CONFIDENCE_HIGH),
     ("Alpine.js", "javascript", re.compile(r'(?:x-data\s*=|x-show|x-bind|x-on:|@click)', re.IGNORECASE), CONFIDENCE_HIGH),
     ("HTMX",      "javascript", re.compile(r'(?:hx-get|hx-post|hx-trigger|htmx\.org)', re.IGNORECASE), CONFIDENCE_HIGH),
     ("Stimulus",  "javascript", re.compile(r'(?:data-controller\s*=\s*"|data-action\s*=\s*"|stimulus)', re.IGNORECASE), CONFIDENCE_MEDIUM),
     ("Livewire",  "javascript", re.compile(r'(?:wire:click|wire:model|wire:submit|Livewire)', re.IGNORECASE), CONFIDENCE_HIGH),
     ("Petite-Vue","javascript", re.compile(r'(?:PetiteVue\.createApp)', re.IGNORECASE), CONFIDENCE_MEDIUM),
     ("Solid.js",  "javascript", re.compile(r'(?:solid-js|createSignal|createEffect)', re.IGNORECASE), CONFIDENCE_MEDIUM),
-    ("Preact",    "javascript", re.compile(r'(?:preact|h\(|render\(.*,\s*document)', re.IGNORECASE), CONFIDENCE_LOW),
+    # bare `h\(` matched push(/match(/forEach( — require preact-identifying
+    # context instead.
+    ("Preact",    "javascript", re.compile(r'(?:preact[.\-/]|from\s+["\']preact["\']|render\s*\(\s*h\s*\()', re.IGNORECASE), CONFIDENCE_LOW),
     ("Lit",       "javascript", re.compile(r'(?:LitElement|html`<|css`\n|@customElement)', re.IGNORECASE), CONFIDENCE_MEDIUM),
 ]
 
@@ -1101,10 +1121,15 @@ def analyze_os(
     """Infer operating system from server header and response characteristics."""
     detections: list[TechDetection] = []
 
-    # 8a. Server header → OS mapping
+    # 8a. Server header → OS mapping. One detection PER OS (the header
+    # "Microsoft-IIS/10.0" matched both the "IIS" and "Microsoft-IIS" keys
+    # and used to emit duplicate Windows rows).
     server_header = headers.get("server", "")
+    server_header_l = server_header.lower()
+    hinted_os: list[str] = []
     for srv_name, os_name in SERVER_OS_HINTS.items():
-        if srv_name.lower() in server_header.lower():
+        if srv_name.lower() in server_header_l and os_name not in hinted_os:
+            hinted_os.append(os_name)
             detections.append(TechDetection(
                 name=os_name,
                 category="os",
@@ -1113,15 +1138,21 @@ def analyze_os(
                 evidence_type="header",
             ))
 
-    # 8b. IIS → Windows (strong signal)
-    if "Microsoft-IIS" in server_header or "IIS" in server_header:
-        detections.append(TechDetection(
-            name="Windows",
-            category="os",
-            confidence=CONFIDENCE_MEDIUM,
-            evidence=f"Server header indicates Windows: {server_header}",
-            evidence_type="header",
-        ))
+    # 8b. IIS → Windows (strong signal, case-insensitive header compare).
+    # Upgrade the existing Windows row instead of appending a duplicate.
+    if "microsoft-iis" in server_header_l or "iis" in server_header_l:
+        win = next((d for d in detections if d.name == "Windows"), None)
+        if win is not None:
+            win.confidence = max(win.confidence, CONFIDENCE_MEDIUM)
+            win.evidence = f"Server header indicates Windows: {server_header}"
+        else:
+            detections.append(TechDetection(
+                name="Windows",
+                category="os",
+                confidence=CONFIDENCE_MEDIUM,
+                evidence=f"Server header indicates Windows: {server_header}",
+                evidence_type="header",
+            ))
 
     # 8c. Body-based OS hints (from error pages, etc.)
     if body:

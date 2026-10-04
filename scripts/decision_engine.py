@@ -27,6 +27,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import load_json, dump_json
@@ -233,9 +234,28 @@ def decide_scope_expansion(findings: list, candidate_target: dict,
     validated = [f for f in findings if f.get("status") == "validated"]
     candidate_url = candidate_target.get("url", "") or candidate_target.get("target", "")
     candidate_path = candidate_url.lower()
+    env = candidate_target.get("environment", "staging")
+
+    # Gate 0: already inside the current authorization -> nothing to expand.
+    # (This parameter used to be ignored entirely; expansion advice never
+    # consulted the scope it was supposed to extend.)
+    scope_domains = (current_scope or {}).get("domains") if isinstance(current_scope, dict) else None
+    if scope_domains:
+        try:
+            from scope_guard import _match_domain
+            host = urlsplit(candidate_url if "://" in candidate_url
+                            else "http://" + candidate_url).hostname or ""
+            if host and any(_match_domain(host, d) for d in scope_domains):
+                return DecisionResult(
+                    decision="keep_scope", score=0.0, threshold=THRESHOLD_EXPAND_CHAIN,
+                    reasoning=f"Candidate host '{host}' is already inside the "
+                              "current scope — no expansion needed",
+                    factors={"in_scope": True, "environment": env},
+                    rule_path="Gate0: already_in_scope")
+        except Exception:
+            pass  # fall through to the normal gates on any lookup problem
 
     # Gate 1: production check
-    env = candidate_target.get("environment", "staging")
     if env == "production":
         return DecisionResult(
             decision="keep_scope", score=0.0, threshold=THRESHOLD_EXPAND_CHAIN,
@@ -350,7 +370,10 @@ def heuristic_confidence(finding: dict) -> dict:
     ev_score = present / len(core_fields)
 
     # ---- reproducibility (0.0-1.0) ----
-    replay_results = finding.get("replay_results", [])
+    # Only validator-issued replays (response_hash) count, mirroring
+    # confidence_scoring.score_reproducibility; non-dict entries ignored.
+    replay_results = [r for r in (finding.get("replay_results") or [])
+                      if isinstance(r, dict) and r.get("response_hash")]
     if replay_results:
         matched = sum(1 for r in replay_results if r.get("signal_matched"))
         rep_score = matched / len(replay_results)
@@ -378,7 +401,7 @@ def heuristic_confidence(finding: dict) -> dict:
     corr_score = 0.0
     if len(replay_results) >= 2 and all(r.get("signal_matched") for r in replay_results):
         corr_score += 0.5
-    adaptive = finding.get("adaptive_metadata", {})
+    adaptive = finding.get("adaptive_metadata", {}) or {}
     if adaptive.get("waf_detected"):
         corr_score += 0.3
     if adaptive.get("mutations_tried", 0) > 0:

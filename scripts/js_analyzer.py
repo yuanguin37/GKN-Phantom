@@ -61,13 +61,29 @@ SECRET_PATTERNS = {
     "google_api_key": r"AIza[0-9A-Za-z\-_]{35}",
     "slack_token": r"xox[baprs]-[0-9A-Za-z\-]+",
     "jwt_token": r"eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}",
-    "private_key": r"-----BEGIN (?:RSA|EC|DSA|OPENSSH|PGP) PRIVATE KEY-----",
+    # [A-Z ]* covers PKCS#8 "BEGIN PRIVATE KEY" and "BEGIN ENCRYPTED PRIVATE
+    # KEY" — the two most common modern PEM headers, both previously missed.
+    "private_key": r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
     "generic_api_key": r"(?i)(?:api[_-]?key|apikey|secret|token|password|passwd)\s*[:=]\s*['\"]([^'\"]{8,})['\"]",
     "connection_string": r"(?:mongodb|mysql|postgres|redis|jdbc)://[^'\"]+",
-    "internal_url": r"https?://(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.16\.\d+\.\d+|192\.168\.\d+\.\d+)[^\s'\"<>]*",
+    # Full RFC1918 for 172.x: 172.16-31 (the old pattern matched 172.16.x.x
+    # only, missing Docker's 172.17.0.0/16 and the rest of the range).
+    "internal_url": r"https?://(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)[^\s'\"<>]*",
     "stripe_key": r"(?:sk|pk)_(?:live|test)_[a-zA-Z0-9]{24,}",
     "firebase_config": r"(?:apiKey|authDomain|projectId|messagingSenderId)\s*:\s*['\"]([^'\"]+)['\"]",
 }
+
+# Placeholder values that make a generic_api_key/firebase match a validation
+# or i18n string rather than a secret ("password: \"required\""). These used
+# to be reported as HIGH secrets.
+_PLACEHOLDER_VALUES = re.compile(
+    r"""(?xi)^(?:required|undefined|null|true|false|none|change-?me|example|
+    sample|placeholder|your[-_].*|<[^>]+>|\{\{.*\}\}|\$\{.*\}|xxxx+|test|
+    dummy|todo|tbd|fixme|enter[-_].*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$""")
+
+
+def _is_placeholder_value(value: str) -> bool:
+    return bool(_PLACEHOLDER_VALUES.match(value.strip().strip("'\"")))
 
 # ---- Dangerous sinks (JS API calls that can lead to XSS/DOM-based vulns) ----
 DANGEROUS_SINKS = {
@@ -191,19 +207,36 @@ def _classify_severity(pattern_type: str) -> str:
 
 
 def analyze_secrets(source: str, source_url: str = "", source_file: str = "") -> list[JSFinding]:
-    """Scan JS source for leaked secrets and API keys."""
+    """Scan JS source for leaked secrets and API keys.
+
+    Deduped by (pattern, match) and capped (a minified bundle used to emit
+    thousands of duplicate hits); value-style placeholders for the
+    generic_api_key / firebase_config families are filtered as FPs.
+    """
     findings = []
+    seen: set = set()
     for name, m in _pm("secrets", SECRET_PATTERNS).iter_matches(source):
-            findings.append(JSFinding(
-                type="secret_leak",
-                severity=_classify_severity(name),
-                pattern=name,
-                match=m.group(0),
-                line=_find_line_number(source, m.start()),
-                context=_extract_context(source, m.start(), m.end()),
-                source_file=source_file,
-                source_url=source_url,
-            ))
+        match_text = m.group(0)
+        key = (name, match_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        if name in ("generic_api_key", "firebase_config", "aws_secret_key"):
+            value = m.group(1) if (m.re.groups and m.group(1)) else ""
+            if value and _is_placeholder_value(value):
+                continue
+        if len(seen) > 500:  # hard cap per source
+            break
+        findings.append(JSFinding(
+            type="secret_leak",
+            severity=_classify_severity(name),
+            pattern=name,
+            match=match_text,
+            line=_find_line_number(source, m.start()),
+            context=_extract_context(source, m.start(), m.end()),
+            source_file=source_file,
+            source_url=source_url,
+        ))
     return findings
 
 
@@ -400,7 +433,7 @@ def analyze_file_list(source_list: list[dict]) -> dict:
 # ---- Hidden endpoint extraction (feeds parameter probing) --------------------
 
 _JS_ENDPOINT_RE = re.compile(
-    r"""["'`](/[A-Za-z0-9_\-./%~]*\?[A-Za-z0-9_\-]+=[^"'`\s]+)["'`]"""
+    r"""["'`](?:(https?://[^\s"'`<>]+)|(/(?:[A-Za-z0-9_\-./%~]|\$\{[^}]*\})*\?[A-Za-z0-9_\-]+=[^"'`\s]*))["'`]"""
 )
 
 
@@ -409,9 +442,11 @@ def extract_endpoint_entries(source: str, base_url: str = "",
     """Extract parameterized endpoints (path?query) hardcoded in JS source.
 
     JS bundles are the highest-frequency source of hidden API endpoints in
-    SRC work. Only relative paths carrying a query string are kept — they
-    are resolved against base_url and returned in discover_params-compatible
-    shape so the caller can feed them straight into probe_injection:
+    SRC work. Relative paths AND absolute URLs carrying a query string are
+    kept; `${...}` template segments in the path are tolerated (they still
+    reveal the endpoint shape). Resolved against base_url and returned in
+    discover_params-compatible shape so the caller can feed them straight
+    into probe_injection:
 
       [{"url": "https://origin/api/x?id=1", "param": "id", "value": "1"}]
     """
@@ -420,8 +455,8 @@ def extract_endpoint_entries(source: str, base_url: str = "",
     entries: list[dict] = []
     seen: set[str] = set()
     for m in _JS_ENDPOINT_RE.finditer(source):
-        rel = m.group(1)
-        if "#" in rel or len(rel) > 512:
+        rel = m.group(1) or m.group(2)
+        if not rel or "#" in rel or len(rel) > 512:
             continue
         for name, value in parse_qsl(urlsplit(rel).query, keep_blank_values=True):
             url = urljoin(base_url, rel) if base_url else rel

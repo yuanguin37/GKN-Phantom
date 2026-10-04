@@ -140,10 +140,18 @@ robots、source map、APK/IPA、Changelog、错误栈、备份文件。
 3. 攻击面建模  入口 × 角色 × 信任边界（写 board: hosts / paths）
 4. 三层挖掘    静态审计(输入点→传播链→Sink) → 动态验证(基线差分) → 组合利用
 5. 业务链路    business_logic.py model → plan → ab → judge
-6. 证据固化    finding_validator 重放 ≥2 + 控制请求对照 → confidence_scoring
+6. 证据固化    finding_validator --replay-request 实弹重放 ≥2 + 对照请求
+              （validator 签发 response_hash，硬门1 认这个）→ confidence_scoring
 7. 覆盖度自检  ✅/❌/🔄/💡 写回 board
-8. 交付        report_docx.py（过门才出稿）→ 语义化命名归档
+8. 交付        report_docx.py（过门才出稿，被挡 finding 自动进 unverified_leads[]）
+              → 语义化命名归档
+9. 技能自检    python scripts/selftest.py（改动代码后必跑；9 项含实弹误报门）
 ```
+
+> v5.12 起代码层强制：`quick_combat.py` 无 `--scope scope.json` +
+> `--yes-i-am-authorized` 双开关直接拒绝运行；全部探针流量（含 CN
+> 探针/爬取/JS/注入/OOB）走同一限速闸（默认 3 req/s）；登录态用
+> `--header/-H --cookie --proxy --session-file` 传入。
 
 **阶段与状态机对齐**：ACTIVE_TESTING 执行第 4-5 步，VALIDATION 执行第 6 步，
 REPORT_GENERATION 执行第 8 步。每步结束先写板，再推进状态。
@@ -176,7 +184,8 @@ REPORT_GENERATION 执行第 8 步。每步结束先写板，再推进状态。
 | **exe/dll/sys/样本/加壳二进制/崩溃排查** | `references/pe_reversing.md` | 静态（结构/保护机制/加壳）→ 动态（隔离环境行为监控）→ 漏洞定位；**崩溃必须证明可控，劫持必须证明被加载** |
 | payload 被拦、403/WAF | `waf_evasion.py` + `adaptive_engine.py` | 失败升级 L1-L4 |
 | 国内 OA/中间件（泛微/致远/通达/用友/禅道/JeecgBoot/若依…） | `cn_probes.py` | 32 条未授权探针 + 指纹分流 |
-| 要出提交稿 / 准备交付 | `report_docx.py` | 分层验证门 → DOCX 归档 |
+| 要出提交稿 / 准备交付 | `report_docx.py` | 分层验证门（结构化校验，未知类型/占位词默认拒绝）→ DOCX 归档；被挡 finding 输出 `unverified_leads[]` |
+| 改了代码 / 怀疑技能行为异常 / 换环境部署 | `scripts/selftest.py` | 9 项自检（import 冒烟 + 实弹误报门：干净目标必须 0 findings）全绿才算数 |
 
 **组合场景（多模块联动）**
 

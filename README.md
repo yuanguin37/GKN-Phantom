@@ -2,7 +2,7 @@
 
 > **Production-grade automated penetration testing skill for the OpenClaw AI Agent Framework.**
 
-[![Version](https://img.shields.io/badge/version-5.11.0-blue)](https://github.com/yuanguin37/GKN-Phantom/releases)
+[![Version](https://img.shields.io/badge/version-5.12.0-blue)](https://github.com/yuanguin37/GKN-Phantom/releases)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-Skill-orange)](https://openclaw.ai)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
@@ -289,14 +289,18 @@ python3 scripts/clueboard.py init --target <目标> --focus "<本轮焦点>"
 | 检查 | 期望 |
 |------|------|
 | Python 版本 | ≥ 3.10 |
-| `compileall scripts/` | 无输出（无语法错误），39 个模块 |
+| `python scripts/selftest.py` | **9 项全 PASS**（import/CLI 冒烟、scope_guard 语义、rules 校验、验证器防伪造、六道硬门、pattern_matcher 套件、实弹误报门：catch-all SPA 与加固服务器均 0 findings、真命中样例检出并升级）。`--quick` 跳过实弹段 |
+| `python -m compileall -q scripts/` | 无输出（无语法错误）——仅语法层，真正的门是 selftest |
 | `scope_guard --context --url <越界URL>` | exit 1，`offenders` 给出 `does not match any scope domain`（守卫确实在工作） |
-| `scope_guard --context`（直连样例目标） | exit 1，`could not resolve host`——样例为 `.test` 保留域，离线不可解析，**预期行为** |
 | `clueboard.py list` | 能列出已建板目标（首次为空列表 `[]`，正常） |
 | `business_logic.py scene --name payment` | 打印 8 条支付链路攻击点 |
 | `report_docx.py --emit-template` | 生成 `assets/report_template.docx`；缺 python-docx 时明确提示降级为 `--gate-only` |
 | `AGENTS.md` | 存在且可读（纪律层，开工前必读） |
 | `apk_recon.py <样本.apk>` | 打印组件矩阵（含导出风险）+ 加固判定 + 密钥/端点速筛；无样本可跳过（仅移动端目标需要） |
+
+> 旧版把 `compileall` 当唯一自检门（语法检查抓不到运行时 NameError），并把样例
+> DNS 解析失败写成「预期行为」。v5.12 起以 `scripts/selftest.py` 为准；样例
+> scope 指向本地回环地址，可离线跑通。
 
 > **合规提醒**：以上自检全部在本地完成，不向任何外部主机发包。真正开始测试前必须有**书面授权**；
 > `scope_guard.py` 会对越界目标直接中止，**不要试图绕过它**。
@@ -370,20 +374,29 @@ user: "Run a penetration test on dev-internal.test"
 
 ```bash
 # ── Quick Combat 一键实战管线（推荐入口）──
+# 安全护栏是硬前置：--scope 授权文件 + --yes-i-am-authorized 双开关，缺一不跑；
 # 全层开启：nuclei + 内置探针 + 国内组件探针 + katana爬取 + JS深挖 + 跨运行去重
-python scripts/quick_combat.py --targets targets.txt --output-dir ./combat_output/
+python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized \
+    --targets targets.txt --output-dir ./combat_output/
 
-# 配置 OOB 带外信道（盲SSRF回调验证 → validated级finding）
-python scripts/quick_combat.py --targets targets.txt --oob-provider ceye \
-    --ceye-identifier <id> --ceye-token <token>
+# 带登录态测试（IDOR/越权/业务逻辑的前提）：header 可重复、支持代理与 cookie jar
+python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized \
+    --targets targets.txt -H "Cookie: SESSION=abc" -H "X-Tenant: acme" \
+    --proxy http://127.0.0.1:8080 --session-file cookies.txt
+
+# 配置 OOB 带外信道（盲SSRF回调验证 → validated级finding；--oob-wait 控制回调等待总时长）
+python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized \
+    --targets targets.txt --oob-provider ceye \
+    --ceye-identifier <id> --ceye-token <token> --oob-wait 30
 
 # interactsh 自托管 / 本机安装
-python scripts/quick_combat.py --targets targets.txt --oob-provider interactsh \
+python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized \
+    --targets targets.txt --oob-provider interactsh \
     --interactsh-server https://oast.your-domain.test
 
 # 精简模式：只要内置探针，关闭所有外部依赖
-python scripts/quick_combat.py --targets targets.txt --no-nuclei --no-crawl \
-    --no-js --no-memory
+python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized \
+    --targets targets.txt --no-nuclei --no-crawl --no-js --no-memory
 
 # OOB 信道自检
 python scripts/oob_client.py --provider auto --tag selftest --wait 5
@@ -534,6 +547,7 @@ GKN-Phantom 的安全模型是**不可协商的**。每个操作都经过三层�
 
 | 版本 | 日期 | 主要更新 |
 |------|------|----------|
+| **v5.12.0** | 2026-10 | **把安全与证据模型做进代码**（对照外部审计逐项修复）：`quick_combat` 强制 `--scope`+`--yes-i-am-authorized` 双开关、全探针路径统一令牌桶限速（默认 3 req/s）、登录态支持（`--header/--cookie/--proxy/--session-file`）、每目标软 404 基线（干净目标 0 findings，实测）· `finding_validator` 真实弹重放（≥2 次+对照请求+响应哈希），伪造证据封顶 `unverified`· 六道硬门结构化升级（占位词/未知类型/空 tool 拒绝，23 个无门类型补齐），被挡 finding 输出 `unverified_leads[]`· `pattern_matcher` 两条实测漏报修复 + `tests/test_pattern_matcher.py` 落地· `clueboard` 跨进程文件锁+假设上限按开放数· favicon mmh3 修复为 Shodan 口径、`ssl_analyzer` DER 密钥长度真解析· 新增 `scripts/selftest.py`（9 项，含实弹误报门） |
 | **v5.11.0** | 2026-09 | **Windows PE 逆向域**：`references/pe_reversing.md`（PE 结构必查表含 **TLS 回调与节熵** · 编译器与加壳四类信号 · 隔离环境动态行为与反调试识别 · 内存破坏与 **DLL 劫持三兄弟辨析**）· `rules/pe_security.yaml`（4 条）· 4 个类型命门——`memory_corruption` 须证明**执行流可控**、`dll_hijacking` 须证明**被加载执行**；`knowledge_domains_roadmap.md` 规划的四域至此**全部落地** |
 | **v5.10.0** | 2026-09 | **Android 组件审计 + APK 逆向**：`scripts/apk_recon.py`（**纯标准库 · 秒级**：自研**二进制 AXML 解析器**直接产出组件矩阵与导出风险判定 · 加固特征 `lib*.so` 识别 · dex 字符串与 assets 的密钥/端点速筛且**密钥自动脱敏**）· `references/android_audit.md`（11 类检测 + 可复制 ADB 命令 + **无 Frida/无 Root 降级路径**）· `references/apk_reversing.md`（壳识别 → 脱壳 → 全量还原三段流水线）· `rules/android_security.yaml`（7 条）· 7 个类型命门（组件类须 `adb_repro_cmd` + `effect_proof`） |
 | **v5.9.0** | 2026-09 | **小程序安全域**：`references/miniprogram_security.md`（取包 → 反编译 → 接口/密钥提取 → 越权验证四段链路 · **微信云开发三层面**：云数据库权限规则/云函数调用方校验/云存储遍历 · 登录链路 `code2session`/`session_key`/手机号解密 · 支付链路金额重算与回调验签）· `rules/miniprogram_security.yaml`（8 条）· 7 个类型命门 · **接口越权沿用 Web 的 `idor` A/B 硬标准，不因"是小程序"放低** |

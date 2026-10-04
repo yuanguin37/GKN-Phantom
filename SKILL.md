@@ -1,7 +1,7 @@
 ---
 name: gkn-phantom
-version: 5.11.0
-description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.5 rebuilds the multi-pattern matching hot paths on a Trie/Aho-Corasick engine (pattern_matcher.py): tech fingerprinting, WAF detection, JS secret/sink scanning, DB error fingerprinting, and HTML tech detection now run one AC pass per response and execute only the regexes whose required literals are present — provably identical results; the gate pays off as pattern count and body size grow, while small pattern sets on short bodies fall back to naive evaluation, which is faster there. v5.6 adds the cross-session clue board (clueboard.py: one Markdown board per target holding open assumptions, falsified leads, recovered keys and coverage) and the submission layer (report_docx.py: layered verification gate + SRC/CNVD DOCX with Step-style PoC, mandatory real screenshots and semantic naming), so analyst judgement survives context compression and validated findings become platform-ready reports. v5.3 completes the Quick Combat impact chain: quick detect (nuclei + built-in probes) → content-aware severity escalation (v5.2) → deep-dive adapters proving impact from exposed content (Actuator/GraphQL/Swagger, v5.3 C1) → parameter discovery with bounded error-based SQLi/SSTI probing (v5.3 C2) → auto PoC generation → auto exploit generation → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, covering 38 vulnerability types, 25+ WAF fingerprints, and 20+ attack chain patterns across 39 modules. v5.8-v5.11 extend coverage beyond the web into four knowledge domains, each shipped as a handbook plus a rule file plus its own type gates: AI/LLM application security (prompt injection is judged by a behaviour delta reproduced at least three times against a control request; agent tool abuse requires landed evidence, because a model claiming it executed something is never evidence), mini program security (package recovery through cloud development authorisation bypass, keeping the same A/B cross-proof bar for API IDOR as the web), Android component auditing plus APK reversing (scripts/apk_recon.py — a pure-standard-library binary AXML parser that emits a component matrix with export-risk classification, hardening fingerprints and secret/endpoint triage in seconds — with a no-Frida/no-root degraded path), and Windows PE reversing (a crash must be proven controllable and a hijack proven loaded, all dynamic work in an isolated VM). v5.8-v5.11 add Chinese trigger phrases for these domains: AI应用安全, 提示词注入, 大模型安全, 小程序, 云开发, 越权, APK, 安卓, 导出组件, 逆向, 样本分析, DLL劫持. Trigger phrases include 渗透测试, 打点, 漏洞挖掘, 授权测试, 安全审计, 漏洞扫描, 安全验证, 越权测试, 业务逻辑漏洞, 并发竞态, 出报告, 提交稿, 线索板, and their English equivalents (penetration test, pentest, security audit, vulnerability scan, security validation, IDOR, business logic flaw, race condition, report). v5.7 adds three layers: the discipline layer (AGENTS.md — ten execution disciplines, coverage self-check, the Level 1-7 escalation ladder with "never conclude 'no vulnerability' before Level 4", cross-interface five questions); the business-logic methodology layer (business_logic.py — five-question state-machine modelling, role matrix, A/B cross-proof for IDOR, rate-bounded race-replay planning, evidence adjudication aligned with the report gate); and a trigger→module routing table plus Chinese trigger phrases and a conclusion-first output skeleton.
+version: 5.12.0
+description: GKN-Phantom — production-grade automated penetration testing and security validation skill. v5.12 makes the safety and evidence model REAL in code: quick_combat refuses to run without --scope + --yes-i-am-authorized, every probe path (quick probes, deep-dive, CN probes, crawling, JS fetch, injection, OOB) is throttled by one token bucket (default 3 req/s) and supports authenticated testing (--header/--cookie/--proxy/--session-file); every target gets a soft-404 baseline so catch-all SPAs report ZERO findings (verified by scripts/selftest.py against local catch-all + hardened servers); finding_validator performs REAL replays (≥2 + control request + per-replay response hashes) and only validator-signed bundles can reach "validated" — legacy caller-pasted evidence is capped at unverified leads; the six report gates are structural checks (placeholder text, unknown types and empty tool fields are rejected, all 23 previously ungated types now have type gates) and blocked findings are emitted as unverified_leads[] instead of vanishing. v5.5 rebuilds the multi-pattern matching hot paths on a Trie/Aho-Corasick engine (pattern_matcher.py): tech fingerprinting, WAF detection, JS secret/sink scanning, DB error fingerprinting, and HTML tech detection now run one AC pass per response and execute only the regexes whose required literals are present — provably identical results; the gate pays off as pattern count and body size grow, while small pattern sets on short bodies fall back to naive evaluation, which is faster there. v5.6 adds the cross-session clue board (clueboard.py: one Markdown board per target holding open assumptions, falsified leads, recovered keys and coverage) and the submission layer (report_docx.py: layered verification gate + SRC/CNVD DOCX with Step-style PoC, mandatory real screenshots and semantic naming), so analyst judgement survives context compression and validated findings become platform-ready reports. v5.3 completes the Quick Combat impact chain: quick detect (nuclei + built-in probes) → content-aware severity escalation (v5.2) → deep-dive adapters proving impact from exposed content (Actuator/GraphQL/Swagger, v5.3 C1) → parameter discovery with bounded error-based SQLi/SSTI probing (v5.3 C2) → auto PoC generation → auto exploit generation → bundled combat report. Retains v5 capabilities including interactive browser agent (Playwright), HTML/PDF visualization reports, YAML rule configuration with hot-reload, covering 38 vulnerability types, 25+ WAF fingerprints, and 20+ attack chain patterns across 39 modules. v5.8-v5.11 extend coverage beyond the web into four knowledge domains, each shipped as a handbook plus a rule file plus its own type gates: AI/LLM application security (prompt injection is judged by a behaviour delta reproduced at least three times against a control request; agent tool abuse requires landed evidence, because a model claiming it executed something is never evidence), mini program security (package recovery through cloud development authorisation bypass, keeping the same A/B cross-proof bar for API IDOR as the web), Android component auditing plus APK reversing (scripts/apk_recon.py — a pure-standard-library binary AXML parser that emits a component matrix with export-risk classification, hardening fingerprints and secret/endpoint triage in seconds — with a no-Frida/no-root degraded path), and Windows PE reversing (a crash must be proven controllable and a hijack proven loaded, all dynamic work in an isolated VM). v5.8-v5.11 add Chinese trigger phrases for these domains: AI应用安全, 提示词注入, 大模型安全, 小程序, 云开发, 越权, APK, 安卓, 导出组件, 逆向, 样本分析, DLL劫持. Trigger phrases include 渗透测试, 打点, 漏洞挖掘, 授权测试, 安全审计, 漏洞扫描, 安全验证, 越权测试, 业务逻辑漏洞, 并发竞态, 出报告, 提交稿, 线索板, and their English equivalents (penetration test, pentest, security audit, vulnerability scan, security validation, IDOR, business logic flaw, race condition, report). v5.7 adds three layers: the discipline layer (AGENTS.md — ten execution disciplines, coverage self-check, the Level 1-7 escalation ladder with "never conclude 'no vulnerability' before Level 4", cross-interface five questions); the business-logic methodology layer (business_logic.py — five-question state-machine modelling, role matrix, A/B cross-proof for IDOR, rate-bounded race-replay planning, evidence adjudication aligned with the report gate); and a trigger→module routing table plus Chinese trigger phrases and a conclusion-first output skeleton.
 ---
 
 # GKN-Phantom — Penetration Testing Skill
@@ -71,6 +71,31 @@ finding carries reproducible evidence. A hard **Reproducibility Gate**
 (see below) guarantees that only live-replayed, control-compared findings
 reach the report — theoretical or assumed vulnerabilities are quarantined
 as `unverified_leads` and never reported as vulnerabilities.
+
+## Implementation Status (v5.12 — what code does vs. what the agent does)
+
+Claims in this file are bounded by what the scripts actually enforce. The
+`scripts/selftest.py` gate (9 checks, including a live false-positive pass:
+a catch-all SPA and a hardened server MUST both yield ZERO findings) verifies
+this table stays honest. Run `python scripts/selftest.py` after any change.
+
+| Capability | Status | Enforced by |
+| --- | --- | --- |
+| Scope enforcement (flag + validation) | **CODE** — `quick_combat.py` refuses to run without `--scope` + `--yes-i-am-authorized`; every target re-checked inside the pipeline | `scope_guard.check_target` / `validate_scope` |
+| Rate limiting on ALL probe paths | **CODE** — one token bucket, default 3 req/s, covers quick probes, deep-dive, CN probes, crawl, JS, injection, OOB, replays | `rate_limiter.RateLimiter` via `quick_combat._http_request` |
+| Authenticated testing | **CODE** — `--header/-H`, `--cookie`, `--proxy`, `--session-file` apply to every probe | same runtime path |
+| Soft-404 suppression | **CODE** — per-target not-found template; matching responses discarded before becoming findings | `quick_combat.get_soft404_baseline` / `is_soft404` |
+| Reproducibility Gate rules 1/2/4 | **CODE** — validator performs real replays (≥2) + control request, stamps per-replay `response_hash` + `replayed_at`; caller-supplied `signal_matched` is ignored | `finding_validator.perform_replay` / `validate` |
+| `unverified_leads[]` quarantine | **CODE** — validator (`unverified` status), `report_docx` (blocked findings) and `report_generator` (gate-failing validated findings) all emit leads | `finding_validator`, `report_docx.verify_finding`, `report_generator.build_report` |
+| Six hard gates | **CODE** — structural checks; placeholder text, empty tool, unknown/ungated types default-deny; all 47 known types have type gates | `report_docx.TYPE_GATES` / `verify_finding` |
+| Confidence forgery resistance | **CODE** — only validator-signed replays (with `response_hash`) count toward reproducibility | `confidence_scoring.score_reproducibility` |
+| rules/*.yaml hot-reload as detection seeds | **PARTIAL** — schema-validated at load (`rules_loader --validate`, exit 0); detection logic still uses built-in tables; YAMLs are human-readable rule mirrors | `rules_loader.py` |
+| State-machine orchestration | **DISCIPLINE** — no in-code orchestrator; `state.py`/`state_recovery.py` provide checkpoint/retry/rollback primitives; the LLM executes the order from this file | AGENTS.md + this file |
+| business_logic A/B, XSS engine, baseline/differential engine | **METHODOLOGY** — plan/method generators (no network in those modules); execute via the agent or `quick_combat` injection layer | AGENTS.md 纪律四 |
+| `adaptive_engine.build_adaptive_plan` contract | **LEGACY** — returns a flat dict (not an `AdaptivePlan`), WAF heuristics use generic body words; the mutation tables themselves are fixed and real | — |
+
+> Anything listed as DISCIPLINE/METHODOLOGY/PARTIAL/LEGACY must not be
+> described to the user as an automated guarantee.
 
 > **Safety Disclaimer**: This skill is restricted to authorized security
 > testing, internal security audits, and staging/dev/lab environment
@@ -144,7 +169,7 @@ The skill conforms to the OpenClaw Skill interface:
 ```ts
 interface Skill {
   name: string;                 // "gkn-phantom"
-  version: string;              // "5.6.0"
+  version: string;              // "5.12.0"
   description: string;
   inputSchema: object;          // see references/data_schemas.md -> InputSchema
   outputSchema: object;         // see references/data_schemas.md -> OutputSchema
@@ -166,10 +191,13 @@ interface Skill {
 
 ## Execution State Machine
 
-The skill MUST execute as a deterministic state machine. Transition to the next
-state only after the current state's exit criteria are met. Persist
-`state.current` and `state.history` in `ctx.state` so runs are resumable and
-auditable.
+The state machine below is the RECOMMENDED EXECUTION ORDER the agent follows
+and records (see Implementation Status: there is no in-code orchestrator).
+Transition to the next state only after the current state's exit criteria are
+met. Persist `state.current` and `state.history` in `ctx.state` so runs are
+resumable and auditable. The Quick Combat pipeline (`scripts/quick_combat.py`)
+automates the detect→deep-dive→PoC span of this order, but it does NOT remove
+the agent's obligation to run the earlier/later states itself.
 
 ```
 INIT
@@ -404,9 +432,22 @@ DONE
      rules from ../rules/*.yaml, validates schema, hot-reload (mtime watch),
      exports RuleRegistry with get_rules_by_tier/type, backward compatible.
      Used at INIT.
-   - `scripts/quick_combat.py` (v5.4) — Streamlined combat
-     pipeline with a layered impact chain:
-     (1) quick nuclei scan (scope-limited) + 7 built-in probes;
+   - `scripts/quick_combat.py` (v5.12) — Streamlined combat
+     pipeline with a layered impact chain. SAFETY FIRST: requires
+     `--scope scope.json` AND `--yes-i-am-authorized` (no scope file, no
+     run — it aborts before the first packet, and re-validates every target
+     inside the pipeline as defense in depth); all probe traffic is
+     throttled by one token bucket (`--rate-limit`, default 3 req/s) and
+     supports authenticated testing via `--header/-H`, `--cookie`,
+     `--proxy` and `--session-file`. Every target gets a soft-404 baseline
+     whose template discards catch-all-SPA matches before they become
+     findings (clean targets → zero findings; see `scripts/selftest.py`).
+     Escalations mark `severity_escalated_from` and are content-proven:
+     backup archives require magic bytes, `critical` data exposure requires
+     Luhn-valid cards / ≥5 SSN-shaped strings. Usage:
+     `python scripts/quick_combat.py --scope scope.json --yes-i-am-authorized
+     --targets targets.json [--cookie "SESSION=..."] [--rate-limit 3]`;
+     (1) quick nuclei scan (scope-limited) + built-in probes;
      (2) v5.2 **Impact Escalation Layer** (`escalate_severity()`): quick-probe
      findings re-graded from captured response content — live credentials
      (env-style/AWS key/private key), `.git` config disclosure, phpinfo pages,
@@ -571,15 +612,21 @@ timeout), the agent invokes `scripts/state_recovery.py` to recover:
 The safety model is NON-NEGOTIABLE. See `references/safety_policy.md` for the
 full spec. Summary:
 
-- **Scope Guard** — every target, every request, every tool call is checked
-  against `ctx.scope` before execution. Out-of-scope ⇒ immediate ABORT.
+- **Scope Guard** — every target is checked against `ctx.scope` before
+  execution (domain match, IP-range match with per-run DNS cache, path
+  lists; DNS failure is reported as `dns_resolution_failed`, still
+  fail-closed). Out-of-scope ⇒ immediate ABORT. The combat pipeline
+  additionally refuses to run at all without `--scope` + authorization
+  confirmation (see Implementation Status).
 - **Risk Gate** — every action is classified L1–L4. L4 (destructive /
   privilege / write) REQUIRES human approval when
   `config.require_human_approval` is true (default). In `safe_mode`, L4 is
   blocked entirely.
-- **Rate Limit** — default ≤ 3 req/sec with burst control. Over-limit
-  requests are QUEUED, never dropped and never crash. Implemented in
-  `scripts/rate_limiter.py`.
+- **Rate Limit** — default 3 req/sec with burst control. Over-limit
+  requests are QUEUED (FIFO), never dropped and never crash. Implemented in
+  `scripts/rate_limiter.py` and wired into EVERY probe path of the combat
+  pipeline (quick probes, deep-dive, CN probes, crawl, JS, injection, OOB)
+  via `quick_combat._http_request`.
 - **Evidence Requirement** — every finding MUST contain `evidence.request`,
   `evidence.response`, `evidence.timestamp`, `evidence.tool`, and a
   `reproducible` flag. Findings without complete evidence are rejected at
@@ -596,20 +643,26 @@ VALIDATION and enforced again at REPORT_GENERATION.
 ### Hard rules
 
 1. **Live replay ≥ 2** — the PoC is executed against the live target at
-   least twice by `finding_validator.py`; both replays must reproduce the
-   detection signal. One-shot successes do not count.
-2. **Baseline / control comparison** — a control request (same endpoint,
-   benign or no payload) MUST be captured. The finding is valid only if the
-   payload response differs from the control in the expected way (error,
-   timing delta, content delta, status change). If the control already
-   produces the "signal", the finding is a false positive.
+   least twice by `finding_validator.py` (via `perform_replay()` or
+   `--replay-request`); both replays must reproduce the detection signal.
+   Every replay is stamped with a `response_hash` — that hash is the
+   validator's signature, and `report_docx` hard gate 1 checks it.
+   One-shot successes do not count. Caller-pasted replay evidence (legacy
+   `--replay` shape) can never reach `validated`; the validator caps it at
+   `unverified` (a lead).
+2. **Baseline / control comparison** — pass `control_url` in the replay
+   request spec and the validator sends the benign control too. If the
+   CONTROL response also matches the signal, the signal is not specific and
+   the finding is downgraded to `unverified`.
 3. **Demonstrated impact, not inferred impact** — each finding must name
    the concrete impact actually observed (data read, file read, delay
    measured, token/session obtained, action performed). Inferring impact
    the target *could* have is forbidden.
-4. **Fresh evidence per report** — the request/response pair in
-   `evidence` must come from a replay executed during THIS run, not copied
-   from a scanner export or a previous session.
+4. **Fresh evidence per report** — the validator records the wall-clock
+   time of each actual replay in `evidence.replayed_at`. It never re-stamps
+   captured evidence with the current time. `evidence.request/response`
+   must come from a replay executed during THIS run, not copied from a
+   scanner export or a previous session.
 5. **Quarantine of unverified candidates** — anything that cannot pass
    rules 1–4 is moved to `unverified_leads[]` with the blocking reason
    recorded. Leads are shown in the report appendix for follow-up but are
@@ -968,18 +1021,23 @@ in `unverified_leads[]` (with `blocking_reason`) and MUST NOT influence
 
 ## Testability Requirements
 
-The skill MUST be deterministic, reproducible, and idempotent. The
+The skill is deterministic and idempotent for a fixed target set. The
 `assets/` directory contains worked examples:
 
-- `assets/example_input.json` — a complete sample `AgentContext`.
-- `assets/example_trace.json` — a step-by-step execution trace through every
-  state, with intermediate artifacts.
-- `assets/example_report.json` — the expected final output for the sample
-  input.
+- `assets/example_input.json` — a sample `AgentContext` scoped to a
+  LOCAL target (`127.0.0.1`); run it against `scripts/selftest.py`'s
+  controlled servers or any local lab instance. Do not point it at a
+  `.test`/internet name: DNS-dependent examples are not testable.
+- `assets/example_trace.json` — a step-by-step execution trace through the
+  state machine, with intermediate artifacts.
+- `assets/example_report.json` — the expected final output shape for the
+  sample input (includes `unverified_leads`).
 
-When the user asks to "test", "dry-run", or "validate" the skill, replay the
-example input and confirm the output structure matches
-`assets/example_report.json`.
+When the user asks to "test", "dry-run", or "validate" the skill, run
+`python scripts/selftest.py` — it covers import/CLI smoke, scope_guard
+semantics, rules validation, validator anti-forgery, the report hard gates,
+the pattern_matcher suite, and (with live local servers) the zero-false-
+positive and true-positive pipeline passes. `--quick` skips the live passes.
 
 ## Resources
 

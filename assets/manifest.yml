@@ -1,13 +1,16 @@
 name: gkn-phantom
 display_name: GKN-Phantom
-version: 5.11.0
+version: 5.12.0
 category: security
 runtime: openclaw-agent
 requires_auth: true
 safe_mode_default: true
 description: >-
   Automated, authorized penetration testing and security validation for
-  staging/dev/internal/lab environments. v5.7.0 adds three layers: the
+  staging/dev/internal/lab environments. v5.12.0 makes the safety and evidence
+  model real in code (scope/authorization gate, pipeline-wide rate limiting,
+  soft-404 baseline, validator-signed replay evidence, structural report gates).
+  Earlier: v5.7.0 adds three layers: the
   discipline layer (AGENTS.md — ten execution disciplines, coverage self-check,
   the Level 1-7 escalation ladder with "no 'no vulnerability' conclusion before
   Level 4", the cross-interface five questions and the six-question
@@ -222,7 +225,7 @@ knowledge_domains:             # v5.8-v5.11 NEW — handbook + rules + gates per
     degraded_path_required: true        # no-Frida / no-root must be documented
     compliance: self_owned_apps_only
   - domain: windows_pe
-    version: 5.11.0
+    version: 5.12.0
     handbook: references/pe_reversing.md
     rules: rules/pe_security.yaml
     rule_count: 4

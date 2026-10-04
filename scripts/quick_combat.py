@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
-"""Quick Combat Pipeline — GKN-Phantom v5.4.
+"""Quick Combat Pipeline — GKN-Phantom v5.12.
 
 One-command pipeline for practical penetration testing:
   1. Quick detection scan (nuclei + built-in probes + CN component probes)
-  2. Content-aware severity escalation (v5.2 — impact escalation layer)
-  3. Deep-dive adapters + parameter/injection probing (v5.3 C1/C2)
-  4. Full-site crawl (katana) feeding param probes (v5.4 C3)
-  5. JS bundle mining via js_analyzer — secrets + hidden endpoints (v5.4 C4)
-  6. Real OOB channel (interactsh/ceye/dnslog) — blind SSRF validation (v5.4 C5)
-  7. Cross-run dedup memory — SRC repeat-submission guard (v5.4 C6)
+  2. Content-aware severity escalation (impact escalation layer)
+  3. Deep-dive adapters + parameter/injection probing
+  4. Full-site crawl (katana) feeding param probes
+  5. JS bundle mining via js_analyzer — secrets + hidden endpoints
+  6. Real OOB channel (interactsh/ceye/dnslog) — blind SSRF validation
+  7. Cross-run dedup memory — SRC repeat-submission guard
   8. Auto PoC generation (curl / Python / HAR / Markdown / raw HTTP)
   9. Auto exploit generation (functional Python scripts)
   10. Visual index HTML + structured JSON bundle + combat manifest
+
+Safety model (v5.12 — non-negotiable):
+  - `--scope scope.json` + `--yes-i-am-authorized` are REQUIRED. Without a
+    scope file the pipeline refuses to run; every target is validated through
+    scope_guard (domains / ip_ranges / path lists) before the first packet.
+  - ALL our own probe traffic (quick probes, deep-dive, CN probes, crawling,
+    JS fetch, injection, OOB fire) goes through one token-bucket RateLimiter
+    (default 3 req/s). `--rate-limit`/`--concurrency` also gate nuclei/katana.
+  - Authenticated testing supported: `--header/-H`, `--cookie`, `--proxy`,
+    `--session-file` (cookie jar) apply to every probe request.
+  - Every target gets a soft-404 baseline (random nonexistent path); any probe
+    response matching that template is discarded. Clean targets report ZERO
+    findings by construction.
 
 Design philosophy (from real combat feedback):
   - Detection should be fast, not exhaustive. Scan narrow, verify quick.
@@ -22,23 +35,34 @@ Design philosophy (from real combat feedback):
     no-op when its dependency is missing — never blocks the pipeline.
 
 Usage:
-  python quick_combat.py --targets targets.json --output-dir ./combat_output/
-  python quick_combat.py --targets targets.json --tech tech_stack.json
-  python quick_combat.py --targets targets.json --no-nuclei --quick-probes-only
-  python quick_combat.py --targets targets.json --oob-provider ceye \\
-      --ceye-identifier xxxx --ceye-token yyyy
+  python quick_combat.py --scope scope.json --yes-i-am-authorized \\
+      --targets targets.json --output-dir ./combat_output/
+  python quick_combat.py --scope scope.json --yes-i-am-authorized \\
+      --targets targets.json --cookie "SESSION=..." --header "X-Tenant: acme"
+  python quick_combat.py --scope scope.json --yes-i-am-authorized \\
+      --targets targets.json --no-nuclei
+  python quick_combat.py --scope scope.json --yes-i-am-authorized \\
+      --targets targets.json --oob-provider ceye --ceye-identifier xxxx --ceye-token yyyy
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
+import hashlib
+import http.cookiejar
 import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -60,6 +84,187 @@ import nuclei_runner
 import poc_generator
 import exploit_generator
 import vuln_detector
+
+PIPELINE_VERSION = "5.12.0"
+_UA = f"GKN-Phantom/{PIPELINE_VERSION}"
+
+# =============================================================================
+# Shared runtime: rate limiting + auth context + soft-404 baselines.
+#
+# Every HTTP helper in this module (and cn_probes, which reuses these) goes
+# through _http_request(), so the token bucket, the authorization headers,
+# the proxy and the cookie jar apply to ALL probe traffic — not just nuclei.
+# =============================================================================
+
+_RUNTIME_LOCK = threading.Lock()
+_RUNTIME: dict[str, Any] = {
+    "limiter": None,        # rate_limiter.RateLimiter
+    "extra_headers": {},    # auth headers (--header/--cookie)
+    "proxy": None,          # --proxy
+    "timeout": 8,
+    "cookiejar": None,      # http.cookiejar.CookieJar (from --session-file)
+    "session_file": None,
+    "soft404": {},          # target-base-url -> baseline dict | None
+    "suppressed": 0,        # responses discarded as soft-404 templates
+}
+
+_HTTP_BODY_CAP = 262144  # never read more than 256KB of any response
+
+
+def configure_runtime(rate_limit: float | None = None, extra_headers: dict | None = None,
+                      proxy: str | None = None, timeout: int = 8,
+                      session_file: str | None = None) -> None:
+    """Set the process-wide HTTP behavior. Call once before probing."""
+    with _RUNTIME_LOCK:
+        if rate_limit and rate_limit > 0:
+            from rate_limiter import RateLimiter
+            _RUNTIME["limiter"] = RateLimiter(rps=float(rate_limit),
+                                              burst=max(3, int(rate_limit)))
+        else:
+            _RUNTIME["limiter"] = None
+        _RUNTIME["extra_headers"] = dict(extra_headers or {})
+        _RUNTIME["proxy"] = proxy
+        _RUNTIME["timeout"] = timeout
+        _RUNTIME["session_file"] = session_file
+        _RUNTIME["cookiejar"] = None
+        if session_file:
+            jar = http.cookiejar.MozillaCookieJar(session_file)
+            if os.path.isfile(session_file):
+                try:
+                    jar.load(ignore_discard=True, ignore_expires=True)
+                except Exception:
+                    pass  # start with an empty jar rather than crash the run
+            _RUNTIME["cookiejar"] = jar
+        _RUNTIME["soft404"] = {}
+        _RUNTIME["suppressed"] = 0
+        # (re)build openers lazily on next use
+        _RUNTIME.pop("_opener", None)
+        _RUNTIME.pop("_opener_noredirect", None)
+
+
+def _acquire() -> None:
+    """Gate one outgoing request through the shared token bucket."""
+    rl = _RUNTIME.get("limiter")
+    if rl is None:
+        return
+    try:
+        rl.acquire()
+    except Exception:
+        time.sleep(0.5)  # queue full / timeout: degrade to a fixed pause
+
+
+def _opener(no_redirect: bool = False):
+    key = "_opener_noredirect" if no_redirect else "_opener"
+    op = _RUNTIME.get(key)
+    if op is None:
+        handlers: list = []
+        if _RUNTIME.get("proxy"):
+            p = _RUNTIME["proxy"]
+            handlers.append(urllib.request.ProxyHandler({"http": p, "https": p}))
+        if _RUNTIME.get("cookiejar") is not None:
+            handlers.append(urllib.request.HTTPCookieProcessor(_RUNTIME["cookiejar"]))
+        # TLS context rides on the HTTPS handler — OpenerDirector.open()
+        # takes no `context` kwarg (that's urlopen's), so passing it there
+        # raises TypeError and silently killed EVERY request.
+        handlers.append(urllib.request.HTTPSHandler(context=_tls_ctx()))
+        if no_redirect:
+            class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers_, newurl):
+                    return None
+            handlers.append(_NoRedirectHandler())
+        op = urllib.request.build_opener(*handlers)
+        _RUNTIME[key] = op
+    return op
+
+
+def _tls_ctx():
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _http_request(url: str, method: str = "GET", data: bytes | None = None,
+                  headers: dict | None = None, timeout: float | None = None,
+                  read_cap: int = _HTTP_BODY_CAP,
+                  no_redirect: bool = False) -> tuple[int | None, dict, bytes]:
+    """The ONE outbound request path for every probe in this toolkit.
+
+    Applies: token bucket, auth/session headers, proxy, cookie jar, body cap.
+    Returns (status, lower-cased headers dict, body bytes); (None, {}, b'')
+    when the request could not be completed at all.
+    """
+    _acquire()
+    hdrs = {"User-Agent": _UA}
+    hdrs.update(_RUNTIME.get("extra_headers") or {})
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    timeout = timeout if timeout is not None else _RUNTIME.get("timeout", 8)
+    try:
+        resp = _opener(no_redirect).open(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        resp = e  # 4xx/5xx still carry headers + body — callers judge on them
+    except Exception:
+        return None, {}, b""
+    try:
+        body = resp.read(read_cap)
+    except Exception:
+        body = b""
+    hd: dict = {}
+    try:
+        hd = {k.lower(): str(v) for k, v in resp.headers.items()}
+    except Exception:
+        pass
+    status = getattr(resp, "status", None) or getattr(resp, "code", None)
+    return status, hd, body
+
+
+# ---- Soft-404 baseline (per target) ----------------------------------------
+# One request to a random nonexistent path records the "not found" template.
+# Any probe response matching that template (same status + near-identical
+# body) is discarded BEFORE it becomes a finding. This is what keeps clean
+# targets at zero findings even when they 200-everything (catch-all SPAs).
+
+def get_soft404_baseline(target: str, timeout: float | None = None) -> dict | None:
+    """Fetch (and cache per run) the soft-404 template for a target base URL."""
+    key = target.rstrip("/")
+    cache = _RUNTIME["soft404"]
+    if key in cache:
+        return cache[key]
+    marker = "gkn404" + uuid.uuid4().hex[:12]
+    status, _hd, body = _http_request(f"{key}/{marker}", timeout=timeout)
+    base = None
+    if status is not None:
+        base = {"status": status, "body": body[:65536], "length": len(body),
+                "marker": marker}
+    with _RUNTIME_LOCK:
+        cache[key] = base
+    return base
+
+
+def is_soft404(baseline: dict | None, status: int | None, body: bytes) -> bool:
+    """True when (status, body) matches the target's not-found template."""
+    if not baseline or status is None:
+        return False
+    if status != baseline["status"]:
+        return False
+    base_body: bytes = baseline["body"]
+    if body == base_body:
+        return True
+    marker = baseline.get("marker") or ""
+    a = base_body.decode("utf-8", "replace").replace(marker, "")
+    b = body[:65536].decode("utf-8", "replace").replace(marker, "")
+    if not a or not b:
+        return False
+    sm = difflib.SequenceMatcher(None, a, b)
+    if sm.quick_ratio() < 0.98:
+        return False
+    return sm.ratio() >= 0.98
+
+
+def suppression_count() -> int:
+    return int(_RUNTIME.get("suppressed", 0))
 
 # =============================================================================
 # Quick built-in probes — lightweight, high-signal checks (stdlib only)
@@ -142,6 +347,18 @@ QUICK_PROBES = [
 ]
 
 
+def _has_archive_magic(body: bytes) -> bool:
+    """True when the body starts with a known archive format signature."""
+    magics = (b"PK\x03\x04", b"PK\x05\x06", b"\x1f\x8b", b"BZh", b"Rar!",
+              b"7z\xbc\xaf\x27\x1c", b"\xfd7zXZ")
+    if any(body.startswith(m) for m in magics):
+        return True
+    return len(body) > 262 and body[257:262] == b"ustar"
+
+
+_ARCHIVE_EXT_RE = re.compile(r"\.(?:zip|tar\.gz|tgz|tar|rar|7z|gz)$", re.IGNORECASE)
+
+
 def _run_quick_probe(target: str, probe: dict) -> list[dict]:
     """Run a single quick probe against a target URL. Returns findings.
 
@@ -152,155 +369,129 @@ def _run_quick_probe(target: str, probe: dict) -> list[dict]:
       - optional: severity (overrides the type-based baseline)
       - optional: not_patterns (body blacklist — suppresses soft-404s)
       - optional: _oob_match_domain (real OOB domain for redirect matching)
+
+    Every non-redirect response is first checked against the target's
+    soft-404 template and discarded when it matches — a catch-all SPA that
+    200s every path cannot fabricate findings here.
     """
-    import urllib.request
-    import ssl
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    # Build redirect-suppressed opener for redirect probes
-    class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
-            return None
-
-    no_redirect_opener = urllib.request.build_opener(_NoRedirectHandler)
-
     findings: list[dict] = []
     base = target.rstrip("/")
 
     for path in probe.get("paths", []):
         if path.startswith("?"):
-            url = (base + path) if "?" not in base else base
-            # When base already has query string and path starts with ?, strip path's ?
-            if "?" in base:
-                url = base + "&" + path.lstrip("?")
-            else:
-                url = base + path
+            url = base + ("&" + path[1:] if "?" in base else path)
         else:
             url = f"{base}{path}"
 
-        try:
-            method = str(probe.get("method", "GET")).upper()
-            if method == "POST":
-                req = urllib.request.Request(
-                    url,
-                    data=str(probe.get("post_body", "")).encode("utf-8"),
-                    method="POST",
-                    headers={
-                        "Content-Type": probe.get(
-                            "post_content_type", "application/json"),
-                        "User-Agent": "GKN-Phantom/5.4 QuickProbe",
-                    },
-                )
-            else:
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "GKN-Phantom/5.4 QuickProbe"},
-                )
-            check_type = probe.get("check", "pattern")
-            if check_type == "redirect":
-                try:
-                    resp = no_redirect_opener.open(req, timeout=8)
-                except urllib.error.HTTPError as e:
-                    resp = e
-            else:
-                try:
-                    resp = urllib.request.urlopen(req, timeout=8, context=ctx)
-                except urllib.error.HTTPError as e:
-                    resp = e
-                except Exception:
-                    continue
+        method = str(probe.get("method", "GET")).upper()
+        data: bytes | None = None
+        req_headers: dict = {}
+        if method == "POST":
+            data = str(probe.get("post_body", "")).encode("utf-8")
+            req_headers["Content-Type"] = probe.get(
+                "post_content_type", "application/json")
 
-            body = b""
-            try:
-                body = resp.read()
-            except Exception:
-                pass
-            body_str = body.decode("utf-8", errors="replace")
+        check_type = probe.get("check", "pattern")
+        status, headers, body = _http_request(
+            url, method=method, data=data, headers=req_headers,
+            no_redirect=(check_type == "redirect"),
+        )
+        if status is None and check_type != "redirect":
+            continue  # transport-level failure: no evidence, no finding
 
-            headers = {}
-            try:
-                headers = {k.lower(): str(v) for k, v in resp.headers.items()}
-            except Exception:
-                pass
+        body_str = body.decode("utf-8", errors="replace")
 
-            matched = False
-            if check_type == "header":
-                matched = _check_headers_dict(headers)
-            elif check_type == "pattern":
-                for pattern in probe.get("patterns", []):
-                    if pattern in body_str:
-                        matched = True
-                        break
-                if matched and any(
-                    np in body_str for np in probe.get("not_patterns", [])
-                ):
-                    matched = False
-            elif check_type == "status":
-                if resp.status in probe.get("status_codes", [200]):
-                    blocked = any(
-                        np in body_str for np in probe.get("not_patterns", []))
-                    matched = not blocked
-            elif check_type == "redirect":
-                if resp.status in (301, 302, 303, 307, 308):
-                    loc = headers.get("location", "")
-                    dom = str(probe.get("_oob_match_domain")
-                              or "oob.authorized.test")
-                    if dom in loc or "GKN" in loc:
-                        matched = True
+        # Soft-404 suppression (redirect probes judge on Location, not body)
+        if check_type != "redirect":
+            if is_soft404(get_soft404_baseline(target), status, body):
+                with _RUNTIME_LOCK:
+                    _RUNTIME["suppressed"] += 1
+                continue
+            if any(np in body_str for np in probe.get("not_patterns", [])):
+                continue
 
-            if matched:
-                default_sev = (
-                    "medium" if probe["type"] in ("component_exposure", "info_leak")
-                    else "low"
-                )
-                sev = str(probe.get("severity", default_sev)).lower()
-                findings.append({
-                    "type": probe["type"],
-                    "severity": sev,
-                    "tier": "high" if sev in ("high", "critical") else "low",
-                    "target": target,
-                    "probe_path": path,
-                    "probe_name": probe["name"],
-                    "status": "detected",
-                    "confidence": 0.7,
-                    "evidence": {
-                        "request": (
-                            f"POST {path} body={probe.get('post_body', '')[:200]}"
-                            if method == "POST"
-                            else f"GET {path} HTTP/1.1\\nHost: {target}"
-                        ),
-                        "response": body_str[:2000],
-                        "timestamp": utc_now_iso(),
-                        "tool": "quick_probe",
-                        "status_code": resp.status if hasattr(resp, 'status') else None,
-                        "headers": headers,
-                    },
-                    "reproducible": True,
-                    "safe_poc": True,
-                    "detection_signal": probe.get("patterns", ["header check"])[0] if probe.get("patterns") else "status code",
-                    "auto_verifiable": True,
-                    "verification_method": "http_probe",
-                    "requires_credentials": False,
-                    "requires_human_approval": False,
-                    "blocked_in_safe_mode": False,
-                })
-        except Exception:
-            continue
+        matched = False
+        archive_magic = False
+        if check_type == "header":
+            matched = _check_headers_dict(headers)
+        elif check_type == "pattern":
+            pats = probe.get("patterns", [])
+            allpats = probe.get("all_patterns") or []
+            if pats or allpats:
+                ok_any = any(p in body_str for p in pats) if pats else True
+                ok_all = all(p in body_str for p in allpats)
+                matched = ok_any and ok_all
+        elif check_type == "status":
+            if status in probe.get("status_codes", [200]):
+                if _ARCHIVE_EXT_RE.search(path.lower()):
+                    # "200 on an archive path" is not evidence — the bytes
+                    # must actually be an archive, not the SPA's catch-all.
+                    matched = _has_archive_magic(body)
+                    archive_magic = matched
+                else:
+                    matched = True
+        elif check_type == "redirect":
+            if status in (301, 302, 303, 307, 308):
+                loc = headers.get("location", "")
+                dom = str(probe.get("_oob_match_domain")
+                          or "oob.authorized.test")
+                if dom in loc or "/GKN" in loc:
+                    matched = True
+
+        if matched:
+            default_sev = (
+                "medium" if probe["type"] in ("component_exposure", "info_leak")
+                else "low"
+            )
+            sev = str(probe.get("severity", default_sev)).lower()
+            findings.append({
+                "type": probe["type"],
+                "severity": sev,
+                "tier": "high" if sev in ("high", "critical") else "low",
+                "target": target,
+                "probe_path": path,
+                "probe_name": probe["name"],
+                "status": "detected",
+                "confidence": 0.7,
+                "evidence": {
+                    "request": (
+                        f"POST {path} body={probe.get('post_body', '')[:200]}"
+                        if method == "POST"
+                        else f"GET {path} HTTP/1.1\nHost: {target}"
+                    ),
+                    "response": body_str[:2000],
+                    "timestamp": utc_now_iso(),
+                    "tool": "quick_probe",
+                    "status_code": status,
+                    "headers": headers,
+                    "archive_magic": archive_magic,
+                },
+                "reproducible": True,
+                "safe_poc": True,
+                "detection_signal": probe.get("patterns", ["header check"])[0] if probe.get("patterns") else "status code",
+                "auto_verifiable": True,
+                "verification_method": "http_probe",
+                "requires_credentials": False,
+                "requires_human_approval": False,
+                "blocked_in_safe_mode": False,
+            })
 
     return findings
 
 
 def _check_headers_dict(headers: dict) -> bool:
-    """Check for missing security headers or verbose banners from a header dict."""
-    missing = any(
-        h not in headers
-        for h in ("strict-transport-security", "content-security-policy", "x-frame-options")
-    )
-    verbose = "x-powered-by" in headers or "server" in headers
-    return missing or verbose
+    """Misconfig trigger: >= 2 of the three baseline security headers missing.
+
+    A `Server:`/`X-Powered-By:` banner alone is NOT a finding — every HTTP
+    server sends `Server`, which used to make this probe fire on 100% of
+    targets including correctly-hardened ones.
+    """
+    missing = [
+        h for h in ("strict-transport-security", "content-security-policy",
+                    "x-frame-options")
+        if h not in headers
+    ]
+    return len(missing) >= 2
 
 
 # =============================================================================
@@ -384,12 +575,25 @@ def escalate_severity(finding: dict) -> dict:
             new_sev = "high"
             reason = "phpinfo page exposed — server paths, env vars and module config disclosed"
         elif _ARCHIVE_PATH_RE.search(path) and finding.get("status") == "detected":
-            size = headers.get("content-length", "unknown")
-            new_sev = "high"
-            reason = (
-                f"backup archive reachable (content-length={size}) — "
-                f"potential full source + config disclosure"
+            # Escalate ONLY when the response content proves it's a real
+            # backup: archive magic bytes for archives, actual config/source
+            # content for .bak files. A bare "200 exists" used to fabricate
+            # "potential full source disclosure" highs on catch-all SPAs.
+            ev_magic = bool(evidence.get("archive_magic"))
+            is_bak = path.lower().endswith(".bak")
+            real_config = is_bak and bool(
+                _SECRET_ENV_RE.search(body) or "<?php" in body
+                or "DB_NAME" in body or "define(" in body
             )
+            if ev_magic or real_config:
+                size = headers.get("content-length", "unknown")
+                proof = ("archive magic bytes verified" if ev_magic
+                         else "config/source content verified in response")
+                new_sev = "high"
+                reason = (
+                    f"backup file content verified ({proof}, "
+                    f"content-length={size}) — potential source + config disclosure"
+                )
 
     if new_sev:
         _apply_escalation(finding, new_sev, reason)
@@ -425,6 +629,9 @@ def run_quick_probes(targets: list[str], oob_client=None) -> list[dict]:
 
     all_findings: list[dict] = []
     for target in targets:
+        # Record the not-found template FIRST so every later probe response
+        # can be judged against it.
+        get_soft404_baseline(target)
         for probe in QUICK_PROBES:
             p = probe
             if oob_domain and any(
@@ -451,7 +658,8 @@ def run_quick_probes(targets: list[str], oob_client=None) -> list[dict]:
 # =============================================================================
 
 _DD_TIMEOUT = 8
-_DD_MAX_REQUESTS = 3
+# Deep-dive adapters are bounded by construction: actuator = 3 requests,
+# graphql = 1, swagger = 1 (see each _dd_* adapter).
 
 # JSON-style secret assignment with a NON-masked value (actuator env etc.)
 # Pattern A: plain  "password": "value"
@@ -485,37 +693,17 @@ def _dd_fetch(url: str, data: bytes | None = None,
               read_cap: int = 65536) -> tuple[int | None, dict, str]:
     """Bounded fetch for deep-dive adapters. Returns (status, headers, body).
 
-    `read_cap` bounds how much of the body is read (heapdump-style endpoints
-    can be hundreds of MB — we only need presence + a prefix).
+    Goes through the shared _http_request path (rate limiter, auth headers,
+    proxy, cookie jar). `read_cap` bounds how much of the body is read
+    (heapdump-style endpoints can be hundreds of MB — we only need presence
+    + a prefix).
     """
-    import urllib.request
-    import ssl
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    try:
-        if data is not None:
-            req = urllib.request.Request(
-                url, data=data, method="POST",
-                headers={"Content-Type": "application/json",
-                         "User-Agent": "GKN-Phantom/5.3 DeepDive"},
-            )
-        else:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "GKN-Phantom/5.3 DeepDive"},
-            )
-        resp = urllib.request.urlopen(req, timeout=_DD_TIMEOUT, context=ctx)
-        body = resp.read(read_cap)
-        return resp.status, dict(resp.headers), body.decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read(read_cap)
-        except Exception:
-            body = b""
-        return e.code, dict(e.headers), body.decode("utf-8", errors="replace")
-    except Exception:
-        return None, {}, ""
+    status, headers, body = _http_request(
+        url, method="POST" if data is not None else "GET", data=data,
+        headers={"Content-Type": "application/json"} if data is not None else None,
+        read_cap=read_cap,
+    )
+    return status, headers, body.decode("utf-8", errors="replace")
 
 
 def _dd_actuator(finding: dict, base: str) -> dict:
@@ -673,7 +861,16 @@ _PARAM_URL_RE = re.compile(r'https?://[^\s"\'<>()\[\]]+', re.IGNORECASE)
 _HREF_RE = re.compile(r'(?:href|src|action)=["\']([^"\']+)["\']', re.IGNORECASE)
 
 _SQLI_ERROR_PAYLOADS = ["PTSKILLTEST'", "1'", 'PTSKILLTEST"']
-_SSTI_PAYLOADS = ["{{7*7}}", "${7*7}", "#{7*7}", "<%= 7*7 %>"]
+# Each engine: (payload, computed result, control payload, control result).
+# A hit requires the payload's result to appear in ITS response AND the
+# control to compute its own different result — a page that merely reflects
+# "49" or coincidentally contains "49" no longer qualifies.
+_SSTI_PAYLOADS = [
+    ("{{7*7}}", "49", "{{7*8}}", "56"),
+    ("${7*7}", "49", "${7*8}", "56"),
+    ("#{7*7}", "49", "#{7*8}", "56"),
+    ("<%= 7*7 %>", "49", "<%= 7*8 %>", "56"),
+]
 
 _PARAM_MAX_URLS = 10      # per target
 _INJ_MAX_PARAMS = 5      # per target
@@ -700,17 +897,8 @@ def discover_params(target: str, timeout: int = 8,
     if not origin:
         return []
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    try:
-        req = urllib.request.Request(
-            base, headers={"User-Agent": "GKN-Phantom/5.4 ParamDiscovery"},
-        )
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
-        html = resp.read(262144).decode("utf-8", errors="replace")
-    except Exception:
-        html = ""
+    _status, _hd, html_bytes = _http_request(base, timeout=timeout)
+    html = html_bytes.decode("utf-8", errors="replace")
 
     candidates: list[str] = [m.group(0).rstrip(".,);") for m in _PARAM_URL_RE.finditer(html)]
     candidates += [urljoin(base, m.group(1)) for m in _HREF_RE.finditer(html)]
@@ -796,24 +984,10 @@ def probe_injection(target: str, param_entries: list[dict],
 
     base = target.rstrip("/")
     findings: list[dict] = []
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
 
     def _get(url: str) -> str:
-        try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "GKN-Phantom/5.3 InjectProbe"},
-            )
-            resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
-            return resp.read(262144).decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
-            try:
-                return e.read(262144).decode("utf-8", errors="replace")
-            except Exception:
-                return ""
-        except Exception:
-            return ""
+        _status, _hd, body_bytes = _http_request(url, timeout=timeout)
+        return body_bytes.decode("utf-8", errors="replace")
 
     def _with_param(url: str, param: str, value: str) -> str:
         return _replace_query_param(url, param, value)
@@ -863,13 +1037,19 @@ def probe_injection(target: str, param_entries: list[dict],
                 f"DB error signature matched [{engine}]: {sig}",
             )
             break
-        # SSTI — arithmetic reflection with baseline differential
-        for payload in _SSTI_PAYLOADS:
+        # SSTI — arithmetic reflection with a double differential: the
+        # payload must compute 49 AND the control must compute 56 in its
+        # own response, neither number present in the baseline.
+        for payload, result, control, cresult in _SSTI_PAYLOADS:
             body = _get(_with_param(entry["url"], entry["param"], payload))
-            if "49" in body and "49" not in baseline:
+            if result not in body or result in baseline:
+                continue
+            cbody = _get(_with_param(entry["url"], entry["param"], control))
+            if cresult in cbody and cresult not in baseline:
                 _emit(
                     "ssti", entry, payload, body,
-                    f"arithmetic reflection: {payload} evaluated to 49 in response",
+                    f"arithmetic reflection: {payload} evaluated to {result} "
+                    f"and control {control} evaluated to {cresult}",
                 )
                 break
 
@@ -909,18 +1089,21 @@ def detect_katana() -> tuple[bool, str | None, str | None]:
 
 
 def crawl_katana(target: str, katana_path: str, depth: int = _KATANA_DEPTH,
-                 timeout: int = _KATANA_TIMEOUT) -> dict:
+                 timeout: int = _KATANA_TIMEOUT,
+                 rate_limit: int = 3) -> dict:
     """Crawl a target with katana (-jsonl output). Returns
     {"urls": [...], "js_urls": [...], "count": N}.
 
     JSONL lines are version-tolerant: the endpoint is read from
     request.endpoint / endpoint / url / response.url, whichever exists.
     Any failure (missing binary, timeout, bad output) → empty result,
-    never an exception.
+    never an exception. The crawler is rate-limited with the same budget
+    as the rest of the pipeline.
     """
     urls: list[str] = []
     js_urls: list[str] = []
-    cmd = [katana_path, "-u", target, "-d", str(depth), "-silent", "-nc", "-jsonl"]
+    cmd = [katana_path, "-u", target, "-d", str(depth), "-silent", "-nc",
+           "-jsonl", "-rl", str(rate_limit), "-c", "5"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception:
@@ -965,40 +1148,20 @@ _JS_FETCH_CAP = 512 * 1024
 
 def _fetch_body(url: str, timeout: int = 8, cap: int = _JS_FETCH_CAP) -> str:
     """Bounded GET returning the body as text ('' on any failure)."""
-    import urllib.request
-    import ssl
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "GKN-Phantom/5.4 JSRecon"},
-        )
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
-        return resp.read(cap).decode("utf-8", "replace")
-    except Exception:
-        return ""
+    _status, _hd, body = _http_request(url, timeout=timeout, read_cap=cap)
+    return body.decode("utf-8", "replace")
 
 
 def collect_js_urls(target: str, timeout: int = 8) -> list[str]:
     """Collect JS file URLs from the entry page's <script src> tags.
 
     This is the no-katana fallback so JS mining works everywhere."""
-    import urllib.request
-    import ssl
     from urllib.parse import urljoin
 
     base = target.rstrip("/")
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(
-            base, headers={"User-Agent": "GKN-Phantom/5.4 JSRecon"})
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
-        html = resp.read(262144).decode("utf-8", "replace")
-    except Exception:
+    _status, _hd, html_bytes = _http_request(base, timeout=timeout)
+    html = html_bytes.decode("utf-8", "replace")
+    if not html:
         return []
     out = []
     for m in _SCRIPT_SRC_RE.finditer(html):
@@ -1100,19 +1263,17 @@ def probe_blind_ssrf(target: str, param_entries: list[dict],
     after all requests are out and converts confirmed callbacks into
     validated findings.
     """
-    import urllib.request
-    import ssl
-
     pending: list[dict] = []
     base = target.rstrip("/")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
 
     for entry in param_entries[:_INJ_MAX_PARAMS]:
         if str(entry.get("param", "")).lower() not in _SSRF_PARAMS:
             continue
-        tag = f"gkn-ssrf-{str(entry['param']).lower()}"
+        # Tag is unique per (param, url): one OOB callback must attribute to
+        # exactly ONE probe, never to every URL sharing `?url=` (and never
+        # across targets).
+        tag = ("gkn-ssrf-" + str(entry["param"]).lower()[:20] + "-"
+               + hashlib.md5(str(entry["url"]).encode("utf-8")).hexdigest()[:8])
         try:
             domain = oob_client.get_domain(tag)
         except Exception:
@@ -1122,9 +1283,7 @@ def probe_blind_ssrf(target: str, param_entries: list[dict],
         url = _replace_query_param(
             entry["url"], entry["param"], f"https://{domain}/probe")
         try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "GKN-Phantom/5.4 OOBProbe"})
-            urllib.request.urlopen(req, timeout=6, context=ctx)
+            _http_request(url, timeout=6)
         except Exception:
             pass  # blind probe: the response doesn't matter, the callback does
         pending.append({
@@ -1135,17 +1294,31 @@ def probe_blind_ssrf(target: str, param_entries: list[dict],
 
 
 def verify_oob_pending(all_findings: list[dict], oob_pending: list[dict],
-                        oob_client, wait: float = 6.0) -> tuple[int, list[str]]:
-    """Poll the OOB channel once and append validated blind-SSRF findings.
+                        oob_client, wait: float = 20.0) -> tuple[int, list[str]]:
+    """Poll the OOB channel for each pending tag and append validated
+    blind-SSRF findings.
 
-    Mutates all_findings (append). Returns (confirmed_count, summary_lines).
+    Every pending probe has its OWN unique tag, and poll() is called with
+    that tag so the provider actually WAITS for interactions (polling
+    without a tag short-circuits in every provider implementation, which
+    used to make late-arriving callbacks invisible). The total `wait`
+    budget is distributed across tags with a per-tag floor of 2s.
+
+    Mutates all_findings (append). Returns (confirmed_count, interactions).
     """
-    try:
-        interactions = oob_client.poll(wait=wait)
-    except Exception:
-        interactions = []
-    if not isinstance(interactions, list):
-        interactions = []
+    interactions: list = []
+    seen: set[str] = set()
+    per_tag_wait = max(2.0, wait / max(1, len(oob_pending)))
+    for p in oob_pending:
+        try:
+            batch = oob_client.poll(tag=p["tag"], wait=per_tag_wait) or []
+        except Exception:
+            continue
+        for i in batch:
+            key = json.dumps(i, ensure_ascii=False, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                interactions.append(i)
 
     confirmed = 0
     for p in oob_pending:
@@ -1282,8 +1455,8 @@ def run_combat_pipeline(
     use_nuclei: bool = True,
     quick_probes: bool = True,
     severity_filter: list[str] | None = None,
-    rate_limit: int = 150,
-    concurrency: int = 25,
+    rate_limit: float = 3,
+    concurrency: int = 5,
     poc_formats: list[str] | None = None,
     deep: bool = True,
     oob_client=None,
@@ -1291,23 +1464,49 @@ def run_combat_pipeline(
     use_crawl: bool = True,
     use_js: bool = True,
     use_memory: bool = True,
+    scope: dict | None = None,
+    extra_headers: dict | None = None,
+    proxy: str | None = None,
+    session_file: str | None = None,
+    oob_wait: float = 20.0,
 ) -> dict:
     """Run the full detect → deep-dive → PoC → exploit combat pipeline.
 
-    `deep=True` enables the layered extensions:
-      v5.3 — deep-dive adapters (Phase 2.5), param discovery + bounded
-             SQLi/SSTI injection probing (Phase 2.6)
-      v5.4 — CN component probes (Phase 2.55), katana full-site crawl
-             feeding param probes (C3), JS bundle mining via js_analyzer
-             with hidden-endpoint chaining (C4), real OOB blind-SSRF
-             validation (C5), cross-run dedup memory (C6).
+    `scope` (validated via scope_guard) is REQUIRED for real use: when
+    provided, every target is re-checked here before the first packet and
+    the run aborts on any out-of-scope target. When None (library callers
+    that already enforced scope upstream), the pipeline proceeds but the
+    manifest records `scope_checked: false`.
 
-    Every v5.4 layer degrades to a no-op when its dependency is missing
-    (no katana / no OOB provider / no JS files) — zero overhead, never
-    blocks the pipeline. Returns a summary dict with artifact paths.
+    `rate_limit` (default 3 req/s) throttles ALL probe traffic through one
+    token bucket and is passed to nuclei/katana as well. `deep=True` enables
+    the layered extensions: deep-dive adapters, param discovery + bounded
+    SQLi/SSTI injection probing, CN component probes, katana full-site crawl,
+    JS bundle mining, real OOB blind-SSRF validation, cross-run dedup memory.
+
+    Every layer degrades to a no-op when its dependency is missing (no
+    katana / no OOB provider / no JS files) — zero overhead, never blocks
+    the pipeline. Returns a summary dict with artifact paths.
     """
     if poc_formats is None:
         poc_formats = ["curl", "python", "raw_http"]
+
+    configure_runtime(rate_limit=rate_limit, extra_headers=extra_headers,
+                      proxy=proxy, session_file=session_file)
+
+    # Scope enforcement INSIDE the pipeline too (defense in depth): even a
+    # library caller passing a scope gets every target re-validated here.
+    scope_checked = False
+    if scope:
+        import scope_guard
+        errs = scope_guard.validate_scope(scope)
+        if errs:
+            raise ValueError("invalid scope config: " + "; ".join(errs))
+        for t in targets:
+            ok, reason = scope_guard.check_target(t, scope)
+            if not ok:
+                raise PermissionError(f"target out of scope: {t} — {reason}")
+        scope_checked = True
 
     ts_dir = datetime.now(timezone.utc).strftime("combat_%Y%m%d_%H%M%SZ")
     output_path = os.path.join(output_dir, ts_dir)
@@ -1359,9 +1558,6 @@ def run_combat_pipeline(
                     plan.commands[0] if plan.commands else "echo 'no commands'",
                     shell=True, capture_output=True, text=True, timeout=plan.estimated_time_seconds + 60,
                 )
-                nuclei_findings = [
-                    f.to_dict() for f in nuclei_runner.parse_nuclei_output(proc.stdout)
-                ]
                 deduped = nuclei_runner.deduplicate_findings(
                     nuclei_runner.parse_nuclei_output(proc.stdout)
                 )
@@ -1416,9 +1612,11 @@ def run_combat_pipeline(
     # ------------------------------------------------------------------
     # Phase 2.5 (v5.3 C1): Deep-dive adapters on detected quick-probe
     # findings — fetch exposed content, prove impact, escalate severity.
-    # Zero overhead when no quick probe hit.
+    # Zero overhead when no quick probe hit. Gated on `deep` only (NOT on
+    # the quick-probes switch): CN/component findings carry probe_path too
+    # and deserve deep-dive even when built-in probes are disabled.
     # ------------------------------------------------------------------
-    if deep and quick_probes:
+    if deep:
         dd_count = 0
         for f in list(all_findings):
             if f.get("status") == "detected" and "probe_path" in f:
@@ -1460,7 +1658,7 @@ def run_combat_pipeline(
             # C3: full-site crawl (fallback: entry page only)
             if katana_ok and kpath:
                 try:
-                    cr = crawl_katana(t, kpath)
+                    cr = crawl_katana(t, kpath, rate_limit=int(max(1, rate_limit)))
                 except Exception:
                     cr = {"urls": [], "js_urls": [], "count": 0}
                 extra_urls = cr.get("urls", [])
@@ -1491,7 +1689,11 @@ def run_combat_pipeline(
                     entries += [e for e in je
                                 if (e["url"], e["param"]) not in seen_e]
             if entries:
-                param_findings.extend(probe_injection(t, entries))
+                try:
+                    param_findings.extend(probe_injection(t, entries))
+                except Exception as e:
+                    summary_parts.append(
+                        f"Param probes on {t}: aborted ({e})")
                 # C5: blind SSRF via real OOB channel
                 if oob_client is not None:
                     try:
@@ -1520,7 +1722,8 @@ def run_combat_pipeline(
     # C5 (cont.): before IDs are assigned, poll the OOB channel once and
     # convert confirmed callbacks into validated blind-SSRF findings.
     if oob_client is not None and oob_pending:
-        confirmed, _ = verify_oob_pending(all_findings, oob_pending, oob_client)
+        confirmed, _ = verify_oob_pending(all_findings, oob_pending, oob_client,
+                                          wait=oob_wait)
         if confirmed:
             summary_parts.append(
                 f"OOB verification: {confirmed} blind SSRF callbacks "
@@ -1546,7 +1749,31 @@ def run_combat_pipeline(
 
     sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     deduped_all.sort(key=lambda x: sev_order.get(x.get("severity", "low"), 5))
-    all_findings = deduped_all
+
+    # Severity filter applies to EVERY layer's output (escalation already
+    # ran), not just nuclei templates — `--severity critical` must not
+    # still emit medium/low findings.
+    filtered: list[dict] = []
+    dropped_by_sev = 0
+    for f in deduped_all:
+        if f.get("severity", "low").lower() in sev_filter or \
+                f.get("severity", "low").lower() not in sev_order:
+            filtered.append(f)
+        else:
+            dropped_by_sev += 1
+    all_findings = filtered
+    if dropped_by_sev:
+        summary_parts.append(
+            f"Severity filter: {dropped_by_sev} findings below "
+            f"{'/'.join(sev_filter)} threshold dropped")
+
+    # Soft-404 suppression transparency: how many responses were discarded
+    # for matching the target's not-found template.
+    sup = suppression_count()
+    if sup:
+        summary_parts.append(
+            f"Soft-404 suppression: {sup} responses matched the not-found "
+            "template and were discarded")
 
     # ------------------------------------------------------------------
     # Phase 3.5 (v5.4 C6): cross-run dedup against combat memory.
@@ -1602,7 +1829,7 @@ def run_combat_pipeline(
     # Phase 7: Manifest
     # ------------------------------------------------------------------
     manifest = {
-        "pipeline_version": "5.4.0",
+        "pipeline_version": PIPELINE_VERSION,
         "timestamp": utc_now_iso(),
         "targets": targets,
         "target_count": len(targets),
@@ -1611,6 +1838,10 @@ def run_combat_pipeline(
             sev: sum(1 for f in all_findings if f.get("severity") == sev)
             for sev in ["critical", "high", "medium", "low"]
         },
+        "scope_checked": scope_checked,
+        "rate_limit_rps": rate_limit,
+        "authenticated": bool(_RUNTIME.get("extra_headers")
+                              or _RUNTIME.get("cookiejar")),
         "duplicate_known": sum(
             1 for f in all_findings if f.get("duplicate_state")),
         "layers": {
@@ -1633,10 +1864,17 @@ def run_combat_pipeline(
     with open(manifest_path, "w", encoding="utf-8") as fh:
         fh.write(dump_json(manifest))
 
-    # Release the OOB channel (interactsh subprocess etc.)
+    # Release the OOB channel (interactsh subprocess etc.) and persist the
+    # cookie jar so the next run with the same --session-file stays logged in.
     if oob_client is not None:
         try:
             oob_client.close()
+        except Exception:
+            pass
+    jar = _RUNTIME.get("cookiejar")
+    if jar is not None and _RUNTIME.get("session_file"):
+        try:
+            jar.save(ignore_discard=True, ignore_expires=True)
         except Exception:
             pass
 
@@ -1722,7 +1960,7 @@ def _write_combat_index(output_dir: str, findings: list[dict], summary: list[str
 </div>
 
 <p style="color:#64748b;font-size:12px;margin-top:32px">
-  ⚠ AUTHORIZED SECURITY TESTING ONLY. Generated by GKN-Phantom v5.1.
+  ⚠ AUTHORIZED SECURITY TESTING ONLY. Generated by GKN-Phantom v{PIPELINE_VERSION}.
 </p>
 </body></html>"""
 
@@ -1741,7 +1979,12 @@ def _human(seconds: int) -> str:
 
 
 def _load_targets(source: str) -> list[str]:
-    """Load targets from JSON file, text file (one per line), or comma-separated."""
+    """Load targets from JSON file, text file (one per line), or comma-separated.
+
+    Raises ValueError when `source` looks like a targets file (known list
+    extension) but does not exist — silently launching a scan against the
+    literal string "typo.txt" is never acceptable.
+    """
     if not source:
         return []
     # Try JSON
@@ -1759,11 +2002,15 @@ def _load_targets(source: str) -> list[str]:
     if "," in source and not os.path.isfile(source):
         return [t.strip() for t in source.split(",") if t.strip()]
     # Try as file (one per line)
-    try:
+    if os.path.isfile(source):
         with open(source, "r", encoding="utf-8") as fh:
             return [l.strip() for l in fh if l.strip() and not l.startswith("#")]
-    except Exception:
-        pass
+    # Known list-file extensions that DON'T exist -> hard error, never
+    # "scan the literal filename".
+    if source.lower().endswith((".json", ".txt", ".csv", ".ndjson", ".yaml", ".yml")):
+        raise ValueError(
+            f"targets file '{source}' does not exist and the argument is not "
+            "a comma-separated list; pass URLs/hosts directly or fix the path")
     return [source]
 
 
@@ -1772,14 +2019,35 @@ def _load_targets(source: str) -> list[str]:
 # =============================================================================
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="GKN-Phantom Quick Combat Pipeline v5.4")
+    ap = argparse.ArgumentParser(
+        description="GKN-Phantom Quick Combat Pipeline (authorized targets only)")
     ap.add_argument("--targets", required=True,
                     help="Targets: JSON file, comma-separated URLs, or text file (one per line)")
+    ap.add_argument("--scope", required=True,
+                    help="Path to scope JSON ({\"scope\": {domains, ip_ranges, ...}} "
+                         "or a bare scope dict). Mandatory: the run is aborted "
+                         "without it. See scripts/scope_guard.py for the schema.")
+    ap.add_argument("--yes-i-am-authorized", action="store_true",
+                    help="Second required switch: explicit confirmation that "
+                         "every target is inside your written authorization")
     ap.add_argument("--tech", help="Technology fingerprint JSON (from tech_fingerprint.py)")
     ap.add_argument("--output-dir", default="./combat_output",
                     help="Output directory (default: ./combat_output)")
     ap.add_argument("--severity", default="critical,high,medium",
-                    help="Severity filter (default: critical,high,medium)")
+                    help="Severity filter applied to ALL layers (default: critical,high,medium)")
+    ap.add_argument("--header", "-H", action="append", default=[], metavar="NAME: VALUE",
+                    help="Extra request header, repeatable (e.g. -H 'Cookie: SESSION=abc' "
+                         "-H 'Authorization: Bearer eyJ...'). Applied to every probe.")
+    ap.add_argument("--cookie", default=None,
+                    help="Cookie shorthand: --cookie 'SESSION=abc; OTHER=x' "
+                         "(same as -H 'Cookie: ...')")
+    ap.add_argument("--proxy", default=None,
+                    help="HTTP(S) proxy for ALL probe traffic, e.g. http://127.0.0.1:8080")
+    ap.add_argument("--session-file", default=None,
+                    help="MozillaCookieJar file: cookies are loaded before the run "
+                         "and saved after it (keeps the session across runs)")
+    ap.add_argument("--timeout", type=int, default=8,
+                    help="Per-request timeout in seconds (default: 8)")
     ap.add_argument("--no-nuclei", action="store_true",
                     help="Skip nuclei scan (use only quick built-in probes)")
     ap.add_argument("--no-quick-probes", action="store_true",
@@ -1800,28 +2068,79 @@ def main() -> int:
                     choices=["auto", "interactsh", "ceye", "dnslog", "none"],
                     help="OOB channel provider (default: auto = interactsh "
                          "binary in PATH, else ceye env vars)")
+    ap.add_argument("--oob-wait", type=float, default=20.0,
+                    help="Total seconds to wait for OOB callbacks (distributed "
+                         "across pending probes, min 2s each; default: 20)")
     ap.add_argument("--ceye-identifier", default=None,
                     help="ceye.io identifier (or GKN_CEYE_IDENTIFIER env)")
     ap.add_argument("--ceye-token", default=None,
                     help="ceye.io API token (or GKN_CEYE_TOKEN env)")
     ap.add_argument("--interactsh-server", default=None,
                     help="Self-hosted interactsh server URL (or GKN_INTERACTSH_SERVER)")
-    ap.add_argument("--rate-limit", type=int, default=150,
-                    help="Nuclei rate limit (default: 150)")
-    ap.add_argument("--concurrency", type=int, default=25,
-                    help="Nuclei concurrency (default: 25)")
+    ap.add_argument("--rate-limit", type=float, default=3,
+                    help="Requests/second for ALL probe traffic + nuclei "
+                         "(default: 3 — keep it gentle on real targets)")
+    ap.add_argument("--concurrency", type=int, default=5,
+                    help="Nuclei concurrency (default: 5)")
     ap.add_argument("--poc-formats", default="curl,python,raw_http",
                     help="PoC output formats (default: curl,python,raw_http)")
     args = ap.parse_args()
 
-    targets = _load_targets(args.targets)
+    # ---- Authorization gate: BOTH switches or nothing runs ----
+    if not args.yes_i_am_authorized:
+        print("[!] Refusing to run: --yes-i-am-authorized is required.\n"
+              "    This pipeline sends real probe traffic. Pass the flag only "
+              "when every target is inside your WRITTEN authorization.",
+              file=sys.stderr)
+        return 2
+    try:
+        scope_data = load_json(args.scope)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[!] Cannot load scope file {args.scope}: {e}", file=sys.stderr)
+        return 2
+    scope = scope_data.get("scope", scope_data) if isinstance(scope_data, dict) else {}
+    if not isinstance(scope, dict):
+        print("[!] Scope file must contain a scope object", file=sys.stderr)
+        return 2
+
+    import scope_guard
+    scope_errors = scope_guard.validate_scope(scope)
+    if scope_errors:
+        print("[!] Invalid scope config:", file=sys.stderr)
+        for e in scope_errors:
+            print(f"    - {e}", file=sys.stderr)
+        return 2
+
+    try:
+        targets = _load_targets(args.targets)
+    except ValueError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        return 2
     if not targets:
         print("[!] No targets loaded", file=sys.stderr)
         return 2
 
+    ok, offenders = scope_guard.run(targets, scope)
+    if not ok:
+        print("[!] SCOPE VIOLATION — run aborted, no packet was sent:", file=sys.stderr)
+        for o in offenders:
+            print(f"    - {o}", file=sys.stderr)
+        return 1
+
     severity_filter = [
         s.strip().lower() for s in args.severity.split(",") if s.strip()
     ]
+
+    # Auth headers: --header entries + --cookie shorthand
+    extra_headers: dict[str, str] = {}
+    for h in args.header:
+        if ":" not in h:
+            print(f"[!] --header expects 'NAME: VALUE', got: {h!r}", file=sys.stderr)
+            return 2
+        name, _, value = h.partition(":")
+        extra_headers[name.strip()] = value.strip()
+    if args.cookie:
+        extra_headers["Cookie"] = args.cookie
 
     tech_data = None
     if args.tech:
@@ -1849,8 +2168,11 @@ def main() -> int:
             oob_client = None
 
     print(f"\n{'='*60}")
-    print(f"GKN-Phantom Quick Combat Pipeline v5.4")
-    print(f"Targets: {len(targets)} | Severity: {', '.join(severity_filter)}")
+    print(f"GKN-Phantom Quick Combat Pipeline v{PIPELINE_VERSION}")
+    print(f"Scope: {args.scope} | Targets: {len(targets)} | "
+          f"Severity: {', '.join(severity_filter)}")
+    print(f"Rate limit: {args.rate_limit} req/s (all layers) | "
+          f"Auth headers: {len(extra_headers)} | Proxy: {args.proxy or 'off'}")
     print(f"Nuclei: {'ON' if not args.no_nuclei else 'OFF'} | "
           f"Quick probes: {'ON' if not args.no_quick_probes else 'OFF'} | "
           f"Deep: {'ON' if not args.no_deep else 'OFF'}")
@@ -1879,6 +2201,11 @@ def main() -> int:
             use_crawl=not args.no_crawl,
             use_js=not args.no_js,
             use_memory=not args.no_memory,
+            scope=scope,
+            extra_headers=extra_headers,
+            proxy=args.proxy,
+            session_file=args.session_file,
+            oob_wait=args.oob_wait,
         )
     except Exception as e:
         print(f"\n[!] Pipeline failed: {e}", file=sys.stderr)

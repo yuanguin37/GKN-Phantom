@@ -125,13 +125,35 @@ def _recommendations(findings: list[dict]) -> list[str]:
 
 def build_report(findings: list[dict], assets: dict, paths: list[dict],
                  execution_log: list[dict], blocked_l4: bool = False) -> dict:
+    """Assemble FinalOutput.
+
+    v5.12: machine-readable output goes through the SAME layered gate as the
+    DOCX path (report_docx.verify_finding). `status=validated` alone used to
+    be enough to land here — a second, gate-free report path. Now a validated
+    finding that fails the hard gates is demoted to `unverified_leads`.
+    """
+    from report_docx import verify_finding
+
     risk = _risk_score(findings, blocked_l4)
-    report_findings = [f for f in findings if f.get("status") == "validated" and f.get("safe_poc")]
+    report_findings, unverified_leads = [], []
+    for f in findings:
+        if f.get("status") != "validated" or not f.get("safe_poc"):
+            continue
+        gate = verify_finding(f)
+        if gate["passed"]:
+            report_findings.append(f)
+        else:
+            unverified_leads.append({
+                "id": f.get("id", ""), "type": f.get("type", ""),
+                "target": str(f.get("target") or ""),
+                "reason": "未过分层验证门（" + ", ".join(gate["blocked_by"]) + "）",
+            })
     return {
         "summary": _summary(findings, risk, blocked_l4),
         "risk_score": risk,
         "assets": assets,
         "findings": report_findings,
+        "unverified_leads": unverified_leads,
         "attack_paths": paths,
         "recommendations": _recommendations(findings),
         "sarif": _sarif(findings),

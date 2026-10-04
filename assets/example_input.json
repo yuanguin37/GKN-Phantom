@@ -1,13 +1,23 @@
 {
   "scope": {
-    "domains": ["staging.example.test", "*.staging.example.test"],
-    "ip_ranges": ["10.0.0.0/24"],
-    "allowed_paths": ["/", "/api", "/search", "/login", "/users"],
-    "blocked_paths": ["/admin/delete", "/admin/purge"]
+    "domains": [
+      "127.0.0.1",
+      "localhost"
+    ],
+    "ip_ranges": [
+      "127.0.0.0/8"
+    ],
+    "allow_private_ips": true,
+    "allowed_paths": [
+      "/",
+      "/api"
+    ],
+    "blocked_paths": [
+      "/admin/delete"
+    ]
   },
   "targets": [
-    "https://staging.example.test",
-    "https://api.staging.example.test"
+    "http://127.0.0.1:8897"
   ],
   "credentials": {
     "type": "cookie",

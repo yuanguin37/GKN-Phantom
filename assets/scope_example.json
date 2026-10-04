@@ -1,0 +1,12 @@
+{
+  "_说明": "scope 样例：复制为 scope.json 后按书面授权填写。quick_combat --scope scope.json --yes-i-am-authorized 才能运行；scope_guard 会拒绝越界目标，不要绕过它。",
+  "scope": {
+    "domains": ["staging.example.com", "*.staging.example.com"],
+    "ip_ranges": ["10.10.0.0/24"],
+    "allowed_paths": [],
+    "blocked_paths": ["/admin/account", "/logout"]
+  },
+  "targets": [
+    "https://staging.example.com"
+  ]
+}
